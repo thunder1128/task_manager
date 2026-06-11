@@ -9,7 +9,9 @@ cd task_manager
 python3 server.py
 ```
 
-ブラウザで http://127.0.0.1:8000 を開く。停止は `Ctrl+C`。
+ブラウザで http://localhost:8000 を開く。停止は `Ctrl+C`。
+
+既定では `0.0.0.0:8000` で待ち受けるため、**同一ネットワーク内の他の端末からも `http://<このマシンのIP>:8000` でアクセスできる**。同一マシンのみに制限したい場合は `HOST=127.0.0.1 python3 server.py` で起動する。
 
 ## 機能
 
@@ -65,6 +67,48 @@ python3 server.py
 タスクは `column_id`(所属するかんばん列)と `iteration_id`(数値=所属イテレーション / `null`=プロダクトバックログ)を持つ。
 列は `is_done`(その列を「完了」として扱うか)を持つ。
 
-## 設定変更
+## 設定変更(環境変数)
 
-`server.py` 冒頭の `HOST` / `PORT` で待受アドレスを変更できる。
+待受アドレスやDBの場所は環境変数で変更できる。
+
+| 環境変数 | 既定値 | 内容 |
+|---------|-------|------|
+| `HOST` | `0.0.0.0` | 待受アドレス。`0.0.0.0`=全インターフェース(外部からアクセス可)/ `127.0.0.1`=同一マシンのみ |
+| `PORT` | `8000` | 待受ポート |
+| `TASKS_DB_PATH` | `<スクリプトと同じ場所>/tasks.db` | SQLite DBファイルの保存先(永続ボリュームを指す用途) |
+
+```bash
+# 例: ポート8080、DBを別ディレクトリに置いて起動
+HOST=0.0.0.0 PORT=8080 TASKS_DB_PATH=/var/lib/task_manager/tasks.db python3 server.py
+```
+
+## 外部公開・AWSでの運用
+
+> ⚠ **このアプリには認証機能がありません。** `0.0.0.0` で公開すると、到達できる相手は誰でもタスクを読み書きできます。インターネットに直接さらさないでください。
+
+外部から使う場合は、アクセス制御を**ネットワーク側**で行うことを前提とする。
+
+- **同一LAN内で共有するだけ**なら、既定の `HOST=0.0.0.0` のまま `http://<マシンのIP>:8000` で他端末からアクセスできる。OS側のファイアウォールで対象ポートを許可する。
+- **AWS(EC2など)で運用する場合の例:**
+  1. EC2インスタンスを用意し、リポジトリを配置(`git clone`)。Python3標準ライブラリのみなので追加インストール不要。
+  2. **セキュリティグループ**で接続元を絞る(例: 8000番ポートを社内固定IPやVPNからのみ許可)。全開放(`0.0.0.0/0`)はしない。
+  3. 常駐させるには `systemd` サービス化する(例):
+     ```ini
+     # /etc/systemd/system/task-manager.service
+     [Unit]
+     Description=Task Manager
+     After=network.target
+
+     [Service]
+     WorkingDirectory=/opt/task_manager
+     Environment=HOST=127.0.0.1
+     Environment=PORT=8000
+     Environment=TASKS_DB_PATH=/var/lib/task_manager/tasks.db
+     ExecStart=/usr/bin/python3 /opt/task_manager/server.py
+     Restart=always
+
+     [Install]
+     WantedBy=multi-user.target
+     ```
+  4. **推奨: 前段にリバースプロキシ(Nginx/ALB等)を置く。** アプリ自体は `HOST=127.0.0.1` で待ち受け、Nginxで HTTPS終端 + Basic認証 などを付けてから外部公開する。これによりアプリに認証が無い欠点を補える。
+- DBファイル(`tasks.db`)はEBS等の永続ボリューム上に置き、定期的にバックアップすること。

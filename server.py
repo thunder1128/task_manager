@@ -31,9 +31,14 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "tasks.db")
-HOST = "127.0.0.1"
-PORT = 8000
+# DBの保存先。環境変数 TASKS_DB_PATH で差し替え可(AWS等で永続ボリュームを指定する用途)
+DB_PATH = os.environ.get("TASKS_DB_PATH", os.path.join(BASE_DIR, "tasks.db"))
+# 待受アドレス/ポートは環境変数で上書きできる。
+#   HOST=0.0.0.0 … 全ネットワークインターフェースで待受(=ローカルホスト以外からもアクセス可)
+#   HOST=127.0.0.1 … 同一マシンからのみ(従来の挙動)
+# 既定は 0.0.0.0。※このアプリには認証が無いため、到達可能な相手は誰でも読み書きできる点に注意。
+HOST = os.environ.get("HOST", "0.0.0.0")
+PORT = int(os.environ.get("PORT", "8000"))
 
 VALID_PRIORITY = {"low", "mid", "high"}
 # イテレーションの状態
@@ -684,8 +689,15 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     init_db()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"タスク管理アプリ起動: http://{HOST}:{PORT}")
+    # 0.0.0.0 で待ち受ける場合、表示用にループバックではなく実アドレスの案内を出す
+    display_host = "localhost" if HOST in ("0.0.0.0", "") else HOST
+    print(f"タスク管理アプリ起動: http://{display_host}:{PORT}  (待受 {HOST}:{PORT})")
     print(f"DB: {DB_PATH}")
+    if HOST in ("0.0.0.0", ""):
+        print("⚠ 全ネットワークインターフェースで公開中です。このアプリに認証は無いため、")
+        print("  到達できる相手は誰でもタスクを読み書きできます。インターネットに直接さらさず、")
+        print("  AWSのセキュリティグループ/ファイアウォール/リバースプロキシ等でアクセスを制限してください。")
+        print("  同一マシン内のみに制限するには HOST=127.0.0.1 を指定してください。")
     print("停止: Ctrl+C")
     try:
         server.serve_forever()
