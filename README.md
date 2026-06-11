@@ -1,6 +1,7 @@
 # タスク管理WEBアプリ
 
 Python標準ライブラリ + SQLite で動く、軽量なタスク管理アプリ。追加インストール不要。
+**ログイン認証** と **プロジェクト単位のアクセス制御** つき。
 
 ## 起動方法
 
@@ -11,11 +12,23 @@ python3 server.py
 
 ブラウザで http://localhost:8000 を開く。停止は `Ctrl+C`。
 
+初回起動時に**管理者アカウント**が自動作成される(既定: ユーザー名 `admin` / パスワード `admin`)。
+初期値は環境変数 `ADMIN_USERNAME` / `ADMIN_PASSWORD` で指定できる。**初期パスワードのままにせず、ログイン後すぐに変更すること。**
+
 既定では `0.0.0.0:8000` で待ち受けるため、**同一ネットワーク内の他の端末からも `http://<このマシンのIP>:8000` でアクセスできる**。同一マシンのみに制限したい場合は `HOST=127.0.0.1 python3 server.py` で起動する。
+
+## ログイン・ユーザー・プロジェクト
+
+- **ログイン**: ユーザー名とパスワードでログインする。パスワードは pbkdf2-sha256 でハッシュ化して保存され、ログイン状態はセッションCookie(HttpOnly, 7日間有効)で管理される。
+- **ユーザー管理(管理者のみ)**: セルフ登録は無い。ヘッダーの「👤 ユーザー管理」から、管理者がユーザーの作成・パスワード変更・削除を行う。管理者権限の付与も可能。
+- **プロジェクト**: 各ユーザーは自分のプロジェクトを作成でき、**作成者がオーナー**になる。ヘッダーのプルダウンでプロジェクトを切り替える。
+- **メンバー管理(オーナーのみ)**: ヘッダーの「⚙ プロジェクト」からメンバー(既存ユーザー名)を追加/削除できる。権限は「オーナー」「メンバー」。
+- **データの分離**: かんばん列・イテレーション・タスクは**プロジェクトに属し、そのプロジェクトのメンバーだけが閲覧・編集できる**。他人のプロジェクトのデータは一切見えない。
+- プロジェクトを新規作成すると、既定のかんばん列(未着手 / 進行中 / 完了)が自動生成される。
 
 ## 機能
 
-画面はヘッダーのタブで **かんばん** / **バックログ** を切り替えられる。
+ログイン後、ヘッダーのタブで **かんばん** / **バックログ** を切り替えられる(操作対象は選択中のプロジェクト)。
 
 ### かんばんビュー
 - **基本操作**: タスクの追加 / 編集 / 完了 / 削除
@@ -47,24 +60,54 @@ python3 server.py
 
 ## API
 
+認証が必要なエンドポイント(`/api/auth/*` 以外のすべて)は、有効なセッションCookieが無いと `401` を返す。
+プロジェクト内データのAPIは、対象プロジェクトのメンバーでないと `403` を返す。一覧系は `?project_id=<id>`、作成系は body の `project_id` でプロジェクトを指定する。
+
+### 認証
 | メソッド | パス | 内容 |
 |---------|------|------|
-| GET | `/api/tasks` | タスク一覧 |
-| POST | `/api/tasks` | タスク作成 |
+| POST | `/api/auth/login` | ログイン(`username`, `password`)。成功でセッションCookieを発行 |
+| POST | `/api/auth/logout` | ログアウト(セッション失効) |
+| GET | `/api/auth/me` | 現在のユーザー情報(未ログインは401) |
+
+### ユーザー管理(管理者のみ)
+| メソッド | パス | 内容 |
+|---------|------|------|
+| GET | `/api/users` | ユーザー一覧 |
+| POST | `/api/users` | ユーザー作成(`username`, `password`, 任意 `is_admin`) |
+| PUT | `/api/users/<id>` | パスワード変更 / 管理者権限の変更 |
+| DELETE | `/api/users/<id>` | ユーザー削除(所有プロジェクトがあると不可) |
+
+### プロジェクト
+| メソッド | パス | 内容 |
+|---------|------|------|
+| GET | `/api/projects` | 自分が参加するプロジェクト一覧 |
+| POST | `/api/projects` | プロジェクト作成(`name`)。作成者がオーナー、既定列も生成 |
+| PUT | `/api/projects/<id>` | プロジェクト名変更(オーナーのみ) |
+| DELETE | `/api/projects/<id>` | プロジェクト削除(オーナーのみ。配下データも削除) |
+| GET | `/api/projects/<id>/members` | メンバー一覧(メンバーのみ) |
+| POST | `/api/projects/<id>/members` | メンバー追加(オーナーのみ。`username`, 任意 `role`) |
+| DELETE | `/api/projects/<id>/members/<user_id>` | メンバー削除(オーナーのみ) |
+
+### プロジェクト内データ(メンバーのみ)
+| メソッド | パス | 内容 |
+|---------|------|------|
+| GET | `/api/tasks?project_id=<id>` | タスク一覧 |
+| POST | `/api/tasks` | タスク作成(body に `project_id`) |
 | PUT | `/api/tasks/<id>` | タスク更新 |
 | DELETE | `/api/tasks/<id>` | タスク削除 |
-| POST | `/api/tasks/reorder` | グループ内の並び順を保存(`ids` の順に `position` を更新。任意で移動先 `column_id` / `iteration_id` も同時設定) |
-| GET | `/api/columns` | かんばん列一覧 |
-| POST | `/api/columns` | 列作成(`name`, 任意 `is_done`) |
-| POST | `/api/columns/reorder` | 列の並び順を保存(`ids` の順に `position` を更新) |
+| POST | `/api/tasks/reorder` | 並び順を保存(`project_id`, `ids` の順に `position`。任意で移動先 `column_id` / `iteration_id`) |
+| GET | `/api/columns?project_id=<id>` | かんばん列一覧 |
+| POST | `/api/columns` | 列作成(`project_id`, `name`, 任意 `is_done`) |
+| POST | `/api/columns/reorder` | 列の並び順を保存(`project_id`, `ids`) |
 | PUT | `/api/columns/<id>` | 列更新(`name` / `is_done`) |
 | DELETE | `/api/columns/<id>` | 列削除(配下タスクは隣の列へ退避。最後の1列は不可) |
-| GET | `/api/iterations` | イテレーション一覧 |
-| POST | `/api/iterations` | イテレーション作成 |
+| GET | `/api/iterations?project_id=<id>` | イテレーション一覧 |
+| POST | `/api/iterations` | イテレーション作成(body に `project_id`) |
 | PUT | `/api/iterations/<id>` | イテレーション更新 |
 | DELETE | `/api/iterations/<id>` | イテレーション削除(配下タスクはバックログへ退避) |
 
-タスクは `column_id`(所属するかんばん列)と `iteration_id`(数値=所属イテレーション / `null`=プロダクトバックログ)を持つ。
+タスクは `project_id`(所属プロジェクト)、`column_id`(所属するかんばん列)、`iteration_id`(数値=所属イテレーション / `null`=プロダクトバックログ)を持つ。
 列は `is_done`(その列を「完了」として扱うか)を持つ。
 
 ## 設定変更(環境変数)
@@ -76,22 +119,23 @@ python3 server.py
 | `HOST` | `0.0.0.0` | 待受アドレス。`0.0.0.0`=全インターフェース(外部からアクセス可)/ `127.0.0.1`=同一マシンのみ |
 | `PORT` | `8000` | 待受ポート |
 | `TASKS_DB_PATH` | `<スクリプトと同じ場所>/tasks.db` | SQLite DBファイルの保存先(永続ボリュームを指す用途) |
+| `ADMIN_USERNAME` | `admin` | 初回起動時に作る管理者のユーザー名(DBにユーザーが1人もいないときだけ作成) |
+| `ADMIN_PASSWORD` | `admin` | 初回起動時に作る管理者のパスワード |
 
 ```bash
-# 例: ポート8080、DBを別ディレクトリに置いて起動
-HOST=0.0.0.0 PORT=8080 TASKS_DB_PATH=/var/lib/task_manager/tasks.db python3 server.py
+# 例: ポート8080、DBを別ディレクトリ、管理者を指定して起動
+HOST=0.0.0.0 PORT=8080 TASKS_DB_PATH=/var/lib/task_manager/tasks.db \
+  ADMIN_USERNAME=ryo ADMIN_PASSWORD='強いパスワード' python3 server.py
 ```
 
 ## 外部公開・AWSでの運用
 
-> ⚠ **このアプリには認証機能がありません。** `0.0.0.0` で公開すると、到達できる相手は誰でもタスクを読み書きできます。インターネットに直接さらさないでください。
-
-外部から使う場合は、アクセス制御を**ネットワーク側**で行うことを前提とする。
+ログイン認証はあるが、**HTTPのまま運用するとパスワードやセッションCookieが平文で流れる**。外部公開時は必ずHTTPS化し、アクセス制御も**ネットワーク側**で併用すること。
 
 - **同一LAN内で共有するだけ**なら、既定の `HOST=0.0.0.0` のまま `http://<マシンのIP>:8000` で他端末からアクセスできる。OS側のファイアウォールで対象ポートを許可する。
 - **AWS(EC2など)で運用する場合の例:**
   1. EC2インスタンスを用意し、リポジトリを配置(`git clone`)。Python3標準ライブラリのみなので追加インストール不要。
-  2. **セキュリティグループ**で接続元を絞る(例: 8000番ポートを社内固定IPやVPNからのみ許可)。全開放(`0.0.0.0/0`)はしない。
+  2. **セキュリティグループ**で接続元を絞る(例: 443番を社内固定IPやVPNからのみ許可)。アプリの待受ポートは直接公開しない。
   3. 常駐させるには `systemd` サービス化する(例):
      ```ini
      # /etc/systemd/system/task-manager.service
@@ -104,11 +148,13 @@ HOST=0.0.0.0 PORT=8080 TASKS_DB_PATH=/var/lib/task_manager/tasks.db python3 serv
      Environment=HOST=127.0.0.1
      Environment=PORT=8000
      Environment=TASKS_DB_PATH=/var/lib/task_manager/tasks.db
+     Environment=ADMIN_USERNAME=admin
+     Environment=ADMIN_PASSWORD=変更してください
      ExecStart=/usr/bin/python3 /opt/task_manager/server.py
      Restart=always
 
      [Install]
      WantedBy=multi-user.target
      ```
-  4. **推奨: 前段にリバースプロキシ(Nginx/ALB等)を置く。** アプリ自体は `HOST=127.0.0.1` で待ち受け、Nginxで HTTPS終端 + Basic認証 などを付けてから外部公開する。これによりアプリに認証が無い欠点を補える。
-- DBファイル(`tasks.db`)はEBS等の永続ボリューム上に置き、定期的にバックアップすること。
+  4. **推奨: 前段にリバースプロキシ(Nginx/ALB等)を置く。** アプリ自体は `HOST=127.0.0.1` で待ち受け、Nginx/ALBで HTTPS終端してから外部公開する。これでパスワード・Cookieが暗号化される。
+- DBファイル(`tasks.db`)にはハッシュ化済みパスワードやセッションが入る。EBS等の永続ボリューム上に置き、定期的にバックアップ・適切な権限設定を行うこと。

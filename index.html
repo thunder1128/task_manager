@@ -185,11 +185,58 @@
   .check label { margin: 0; }
   .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
   .empty { text-align: center; color: var(--muted); font-size: 13px; padding: 16px 0; }
+  .form-error { color: var(--p-high); font-size: 13px; margin-bottom: 10px; min-height: 18px; }
+  .btn-danger { background: var(--p-high); color: #fff; }
+  .btn-danger:hover { opacity: .88; }
+
+  /* ---- ログイン画面 ---- */
+  .auth-screen {
+    position: fixed; inset: 0; background: var(--bg);
+    display: none; align-items: center; justify-content: center; z-index: 100; padding: 16px;
+  }
+  .auth-screen.open { display: flex; }
+  .auth-card {
+    background: var(--card); border-radius: 12px; width: 100%; max-width: 360px;
+    padding: 32px 28px; box-shadow: 0 8px 30px rgba(9,30,66,.18);
+  }
+  .auth-card h1 { font-size: 22px; margin-bottom: 4px; }
+  .auth-card .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .auth-card .btn-primary { width: 100%; margin-top: 6px; }
+
+  /* ---- ヘッダーのプロジェクト/ユーザー ---- */
+  header select.proj-select {
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
+    font-size: 14px; font-weight: 600; background: var(--card); color: var(--text); max-width: 220px;
+  }
+  .user-badge { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+  .user-badge .uname { font-weight: 700; color: var(--text); }
+  .user-badge .tag-admin {
+    background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
+    border-radius: 10px; padding: 1px 8px;
+  }
+  .role-pill {
+    font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 8px;
+    background: rgba(9,30,66,.08); color: var(--muted);
+  }
+  .role-pill.owner { background: rgba(67,97,238,.14); color: var(--accent-dark); }
+
+  /* ---- 一覧(メンバー/ユーザー) ---- */
+  .list-row {
+    display: flex; align-items: center; gap: 10px; padding: 10px 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  .list-row:last-child { border-bottom: none; }
+  .list-row .grow { flex: 1; }
+  .list-row .name { font-weight: 600; font-size: 14px; }
+  .inline-form { display: flex; gap: 8px; align-items: flex-end; margin-top: 12px; flex-wrap: wrap; }
+  .inline-form .field { margin-bottom: 0; flex: 1; min-width: 140px; }
 </style>
 </head>
 <body>
-<header>
+<header id="appHeader" style="display:none;">
   <h1>📋 タスク管理</h1>
+  <select class="proj-select" id="projectSelect" title="プロジェクトを切り替え"></select>
+  <button class="btn btn-ghost btn-sm" id="manageProjectBtn" title="メンバー・設定">⚙ プロジェクト</button>
   <span class="stats" id="stats"></span>
   <span class="spacer"></span>
   <div class="tabs">
@@ -197,7 +244,38 @@
     <button class="tab" data-view="backlog" id="tab-backlog">バックログ</button>
   </div>
   <button class="btn btn-primary" id="addBtn">+ 新規タスク</button>
+  <span class="user-badge" id="userBadge">
+    <span class="uname" id="userName"></span>
+    <button class="btn btn-ghost btn-sm" id="adminBtn" style="display:none;">👤 ユーザー管理</button>
+    <button class="btn btn-ghost btn-sm" id="logoutBtn">ログアウト</button>
+  </span>
 </header>
+
+<!-- ログイン画面 -->
+<div class="auth-screen" id="authScreen">
+  <div class="auth-card">
+    <h1>📋 タスク管理</h1>
+    <div class="sub">ログインしてください</div>
+    <form id="loginForm">
+      <div class="form-error" id="loginError"></div>
+      <div class="field">
+        <label for="login-user">ユーザー名</label>
+        <input type="text" id="login-user" required autocomplete="username" autofocus>
+      </div>
+      <div class="field">
+        <label for="login-pass">パスワード</label>
+        <input type="password" id="login-pass" required autocomplete="current-password">
+      </div>
+      <button type="submit" class="btn btn-primary">ログイン</button>
+    </form>
+  </div>
+</div>
+
+<!-- プロジェクト未選択時の案内 -->
+<div class="view" id="view-noproject" style="padding:60px 24px; text-align:center;">
+  <p style="color:var(--muted); margin-bottom:16px;">参加しているプロジェクトがありません。</p>
+  <button class="btn btn-primary" id="createFirstProjectBtn">+ プロジェクトを作成</button>
+</div>
 
 <!-- ボード用ツールバー -->
 <div class="toolbar" id="toolbar">
@@ -344,6 +422,88 @@
   </div>
 </div>
 
+<!-- プロジェクト作成/リネーム モーダル -->
+<div class="overlay" id="projOverlay">
+  <div class="modal">
+    <h2 id="projModalTitle">新規プロジェクト</h2>
+    <form id="projForm">
+      <input type="hidden" id="projId">
+      <div class="form-error" id="projError"></div>
+      <div class="field">
+        <label for="p-name">プロジェクト名 *</label>
+        <input type="text" id="p-name" required maxlength="80" autocomplete="off" placeholder="例: 新規Webサイト開発">
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="projCancelBtn">キャンセル</button>
+        <button type="submit" class="btn btn-primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- プロジェクト管理(メンバー)モーダル -->
+<div class="overlay" id="manageOverlay">
+  <div class="modal">
+    <h2>プロジェクト管理</h2>
+    <div class="field">
+      <label>プロジェクト名</label>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <strong id="mg-projname" style="font-size:15px;"></strong>
+        <button class="btn btn-ghost btn-sm" id="mg-rename" style="display:none;">✎ 改名</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>メンバー</label>
+      <div id="mg-members"></div>
+    </div>
+    <form id="addMemberForm" class="inline-form" style="display:none;">
+      <div class="field">
+        <label for="mg-username">ユーザー名を追加</label>
+        <input type="text" id="mg-username" autocomplete="off" placeholder="既存ユーザー名">
+      </div>
+      <div class="field" style="flex:0 0 120px;">
+        <label for="mg-role">権限</label>
+        <select id="mg-role">
+          <option value="member">メンバー</option>
+          <option value="owner">オーナー</option>
+        </select>
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm">追加</button>
+    </form>
+    <div class="form-error" id="mg-error"></div>
+    <div class="modal-actions" style="margin-top:16px; justify-content:space-between;">
+      <button type="button" class="btn btn-danger btn-sm" id="mg-delete" style="display:none;">プロジェクトを削除</button>
+      <button type="button" class="btn btn-ghost" id="manageCloseBtn">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<!-- ユーザー管理(管理者)モーダル -->
+<div class="overlay" id="adminOverlay">
+  <div class="modal">
+    <h2>ユーザー管理(管理者)</h2>
+    <div id="admin-users"></div>
+    <form id="createUserForm" class="inline-form">
+      <div class="field">
+        <label for="au-username">ユーザー名</label>
+        <input type="text" id="au-username" autocomplete="off" placeholder="新規ユーザー名">
+      </div>
+      <div class="field">
+        <label for="au-password">初期パスワード</label>
+        <input type="text" id="au-password" autocomplete="off" placeholder="4文字以上">
+      </div>
+      <div class="field check" style="flex:0 0 auto; align-self:center; margin-top:18px;">
+        <input type="checkbox" id="au-admin"><label for="au-admin">管理者</label>
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm">作成</button>
+    </form>
+    <div class="form-error" id="au-error"></div>
+    <div class="modal-actions" style="margin-top:12px;">
+      <button type="button" class="btn btn-ghost" id="adminCloseBtn">閉じる</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const TASK_API = "/api/tasks";
 const COL_API = "/api/columns";
@@ -357,24 +517,38 @@ let iterations = [];
 let currentView = "board";
 let dropDone = false;
 
+// 認証・プロジェクト状態
+let currentUser = null;
+let projects = [];
+let activeProjectId = null;
+const LS_PROJECT = "tm_active_project";
+
 // ---- API ----
 async function api(base, method, path = "", body) {
   const opts = { method, headers: { "Content-Type": "application/json" } };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(base + path, opts);
+  if (res.status === 401) {
+    showAuthScreen();
+    throw new Error("ログインが必要です");
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `HTTP ${res.status}`);
   }
   return res.status === 204 ? null : res.json();
 }
+function activeProject() { return projects.find(p => p.id === activeProjectId) || null; }
+function isOwner() { const p = activeProject(); return !!(p && p.my_role === "owner"); }
 
 async function load() {
+  if (!activeProjectId) { tasks = []; columns = []; iterations = []; render(); return; }
+  const q = `?project_id=${activeProjectId}`;
   try {
     [tasks, columns, iterations] = await Promise.all([
-      api(TASK_API, "GET"),
-      api(COL_API, "GET"),
-      api(ITER_API, "GET"),
+      api(TASK_API, "GET", q),
+      api(COL_API, "GET", q),
+      api(ITER_API, "GET", q),
     ]);
     render();
   } catch (e) {
@@ -695,7 +869,10 @@ form.addEventListener("submit", async e => {
   if (!payload.title) return;
   try {
     if (id) await updateTask(Number(id), payload);
-    else { const created = await api(TASK_API, "POST", "", payload); tasks.push(created); render(); }
+    else {
+      const created = await api(TASK_API, "POST", "", { ...payload, project_id: activeProjectId });
+      tasks.push(created); render();
+    }
     closeModal();
   } catch (err) { alert("保存に失敗: " + err.message); }
 });
@@ -722,7 +899,7 @@ colForm.addEventListener("submit", async e => {
   if (!payload.name) return;
   try {
     if (id) await api(COL_API, "PUT", "/" + id, payload);
-    else await api(COL_API, "POST", "", payload);
+    else await api(COL_API, "POST", "", { ...payload, project_id: activeProjectId });
     await load();
     closeColModal();
   } catch (err) { alert("保存に失敗: " + err.message); }
@@ -734,7 +911,7 @@ async function moveColumn(col, dir) {
   const ids = columns.map(c => c.id);
   [ids[idx], ids[swap]] = [ids[swap], ids[idx]];
   try {
-    columns = await api(COL_API, "POST", "/reorder", { ids });
+    columns = await api(COL_API, "POST", "/reorder", { ids, project_id: activeProjectId });
     render();
   } catch (e) { alert("並び替えに失敗: " + e.message); }
 }
@@ -783,7 +960,7 @@ iterForm.addEventListener("submit", async e => {
       const i = iterations.findIndex(x => x.id === Number(id));
       if (i >= 0) iterations[i] = updated;
     } else {
-      const created = await api(ITER_API, "POST", "", payload);
+      const created = await api(ITER_API, "POST", "", { ...payload, project_id: activeProjectId });
       iterations.push(created);
     }
     render();
@@ -808,10 +985,15 @@ async function delIteration(it) {
 function switchView(view) {
   currentView = view;
   document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.view === view));
-  document.getElementById("view-board").classList.toggle("active", view === "board");
-  document.getElementById("view-backlog").classList.toggle("active", view === "backlog");
-  document.getElementById("toolbar").style.display = view === "board" ? "flex" : "none";
+  applyView();
   render();
+}
+function applyView() {
+  const hasProj = !!activeProjectId;
+  document.getElementById("view-noproject").classList.toggle("active", !hasProj);
+  document.getElementById("view-board").classList.toggle("active", hasProj && currentView === "board");
+  document.getElementById("view-backlog").classList.toggle("active", hasProj && currentView === "backlog");
+  document.getElementById("toolbar").style.display = (hasProj && currentView === "board") ? "flex" : "none";
 }
 document.querySelectorAll(".tab").forEach(b => b.onclick = () => switchView(b.dataset.view));
 
@@ -865,7 +1047,7 @@ function setupDropList(container, group) {
     if (!id) return;
     const ids = [...container.querySelectorAll(".card")].map(c => Number(c.dataset.id));
     const t = tasks.find(x => x.id === id);
-    const payload = { ids, moved_id: id };
+    const payload = { ids, moved_id: id, project_id: activeProjectId };
     if (t) {
       if (group.field === "column_id" && t.column_id !== group.value) payload.column_id = group.value;
       if (group.field === "iteration_id" && (t.iteration_id ?? null) !== (group.value ?? null))
@@ -878,7 +1060,262 @@ function setupDropList(container, group) {
   });
 }
 
-load();
+// ============ 認証 ============
+function showAuthScreen() {
+  document.getElementById("authScreen").classList.add("open");
+  document.getElementById("appHeader").style.display = "none";
+  ["view-board", "view-backlog", "view-noproject"].forEach(id =>
+    document.getElementById(id).classList.remove("active"));
+  document.getElementById("toolbar").style.display = "none";
+  currentUser = null;
+}
+function hideAuthScreen() {
+  document.getElementById("authScreen").classList.remove("open");
+  document.getElementById("appHeader").style.display = "flex";
+}
+function setCurrentUser(u) {
+  currentUser = u;
+  document.getElementById("userName").innerHTML =
+    escapeHtml(u.username) + (u.is_admin ? ' <span class="tag-admin">管理者</span>' : "");
+  document.getElementById("adminBtn").style.display = u.is_admin ? "" : "none";
+}
+async function boot() {
+  let me;
+  try {
+    const res = await fetch("/api/auth/me");
+    if (res.status === 401) { showAuthScreen(); return; }
+    me = await res.json();
+  } catch (e) { showAuthScreen(); return; }
+  hideAuthScreen();
+  setCurrentUser(me);
+  await loadProjects();
+}
+document.getElementById("loginForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const errEl = document.getElementById("loginError");
+  errEl.textContent = "";
+  const username = document.getElementById("login-user").value.trim();
+  const password = document.getElementById("login-pass").value;
+  try {
+    const u = await api("/api/auth/login", "POST", "", { username, password });
+    document.getElementById("login-pass").value = "";
+    hideAuthScreen();
+    setCurrentUser(u);
+    await loadProjects();
+  } catch (err) { errEl.textContent = err.message; }
+});
+document.getElementById("logoutBtn").onclick = async () => {
+  try { await api("/api/auth/logout", "POST"); } catch (e) {}
+  projects = []; activeProjectId = null; tasks = []; columns = []; iterations = [];
+  showAuthScreen();
+  document.getElementById("login-user").focus();
+};
+
+// ============ プロジェクト ============
+async function loadProjects() {
+  try {
+    projects = await api("/api/projects", "GET");
+  } catch (e) { projects = []; }
+  // アクティブプロジェクトの決定(前回選択 → 先頭)
+  const saved = Number(localStorage.getItem(LS_PROJECT));
+  if (projects.some(p => p.id === saved)) activeProjectId = saved;
+  else activeProjectId = projects.length ? projects[0].id : null;
+  if (activeProjectId) localStorage.setItem(LS_PROJECT, activeProjectId);
+  renderProjectSelect();
+  applyView();
+  await load();
+}
+function renderProjectSelect() {
+  const sel = document.getElementById("projectSelect");
+  sel.innerHTML = projects.map(p =>
+    `<option value="${p.id}">${escapeHtml(p.name)}${p.my_role === "owner" ? " ★" : ""}</option>`
+  ).join("") + `<option value="__new__">＋ 新規プロジェクト…</option>`;
+  if (activeProjectId) sel.value = String(activeProjectId);
+  document.getElementById("manageProjectBtn").style.display = activeProjectId ? "" : "none";
+}
+document.getElementById("projectSelect").onchange = async e => {
+  const v = e.target.value;
+  if (v === "__new__") { renderProjectSelect(); openProjModal(null); return; }
+  activeProjectId = Number(v);
+  localStorage.setItem(LS_PROJECT, activeProjectId);
+  applyView();
+  await load();
+};
+
+// プロジェクト作成/改名モーダル
+const projOverlay = document.getElementById("projOverlay");
+function openProjModal(proj) {
+  document.getElementById("projModalTitle").textContent = proj ? "プロジェクト名を変更" : "新規プロジェクト";
+  document.getElementById("projId").value = proj ? proj.id : "";
+  document.getElementById("p-name").value = proj ? proj.name : "";
+  document.getElementById("projError").textContent = "";
+  projOverlay.classList.add("open");
+  document.getElementById("p-name").focus();
+}
+function closeProjModal() { projOverlay.classList.remove("open"); }
+document.getElementById("projCancelBtn").onclick = closeProjModal;
+projOverlay.onclick = e => { if (e.target === projOverlay) closeProjModal(); };
+document.getElementById("projForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const id = document.getElementById("projId").value;
+  const name = document.getElementById("p-name").value.trim();
+  const errEl = document.getElementById("projError");
+  if (!name) return;
+  try {
+    if (id) {
+      await api("/api/projects", "PUT", "/" + id, { name });
+    } else {
+      const created = await api("/api/projects", "POST", "", { name });
+      activeProjectId = created.id;
+      localStorage.setItem(LS_PROJECT, activeProjectId);
+    }
+    closeProjModal();
+    await loadProjects();
+  } catch (err) { errEl.textContent = err.message; }
+});
+document.getElementById("createFirstProjectBtn").onclick = () => openProjModal(null);
+
+// プロジェクト管理(メンバー)モーダル
+const manageOverlay = document.getElementById("manageOverlay");
+async function openManage() {
+  const p = activeProject();
+  if (!p) return;
+  document.getElementById("mg-projname").textContent = p.name;
+  document.getElementById("mg-error").textContent = "";
+  const owner = isOwner();
+  document.getElementById("mg-rename").style.display = owner ? "" : "none";
+  document.getElementById("addMemberForm").style.display = owner ? "flex" : "none";
+  document.getElementById("mg-delete").style.display = owner ? "" : "none";
+  manageOverlay.classList.add("open");
+  await renderMembers();
+}
+function closeManage() { manageOverlay.classList.remove("open"); }
+document.getElementById("manageCloseBtn").onclick = closeManage;
+manageOverlay.onclick = e => { if (e.target === manageOverlay) closeManage(); };
+document.getElementById("manageProjectBtn").onclick = openManage;
+document.getElementById("mg-rename").onclick = () => { closeManage(); openProjModal(activeProject()); };
+document.getElementById("mg-delete").onclick = async () => {
+  const p = activeProject();
+  if (!p) return;
+  if (!confirm(`プロジェクト「${p.name}」を削除しますか?\n配下のタスク・列・イテレーションも全て削除されます。`)) return;
+  try {
+    await api("/api/projects", "DELETE", "/" + p.id);
+    localStorage.removeItem(LS_PROJECT);
+    activeProjectId = null;
+    closeManage();
+    await loadProjects();
+  } catch (err) { document.getElementById("mg-error").textContent = err.message; }
+};
+async function renderMembers() {
+  const wrap = document.getElementById("mg-members");
+  wrap.innerHTML = "読み込み中…";
+  let members;
+  try {
+    members = await api(`/api/projects/${activeProjectId}/members`, "GET");
+  } catch (e) { wrap.textContent = e.message; return; }
+  const owner = isOwner();
+  wrap.innerHTML = "";
+  members.forEach(m => {
+    const row = document.createElement("div");
+    row.className = "list-row";
+    const removable = owner && m.role !== "owner";
+    row.innerHTML = `
+      <span class="name grow">${escapeHtml(m.username)}${m.user_id === currentUser.id ? "(自分)" : ""}</span>
+      <span class="role-pill ${m.role}">${m.role === "owner" ? "オーナー" : "メンバー"}</span>
+      ${removable ? `<button class="btn btn-ghost btn-sm" data-uid="${m.user_id}">削除</button>` : ""}`;
+    const btn = row.querySelector("button");
+    if (btn) btn.onclick = async () => {
+      if (!confirm(`${m.username} をこのプロジェクトから外しますか?`)) return;
+      try { await api(`/api/projects/${activeProjectId}/members`, "DELETE", "/" + m.user_id); await renderMembers(); }
+      catch (err) { document.getElementById("mg-error").textContent = err.message; }
+    };
+    wrap.appendChild(row);
+  });
+}
+document.getElementById("addMemberForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const errEl = document.getElementById("mg-error");
+  errEl.textContent = "";
+  const username = document.getElementById("mg-username").value.trim();
+  const role = document.getElementById("mg-role").value;
+  if (!username) return;
+  try {
+    await api(`/api/projects/${activeProjectId}/members`, "POST", "", { username, role });
+    document.getElementById("mg-username").value = "";
+    await renderMembers();
+    await loadProjectsQuiet();
+  } catch (err) { errEl.textContent = err.message; }
+});
+// メンバー数などの表示更新だけ行う(アクティブは変えない)
+async function loadProjectsQuiet() {
+  try { projects = await api("/api/projects", "GET"); renderProjectSelect(); } catch (e) {}
+}
+
+// ============ ユーザー管理(管理者) ============
+const adminOverlay = document.getElementById("adminOverlay");
+async function openAdmin() {
+  document.getElementById("au-error").textContent = "";
+  adminOverlay.classList.add("open");
+  await renderUsers();
+}
+function closeAdmin() { adminOverlay.classList.remove("open"); }
+document.getElementById("adminBtn").onclick = openAdmin;
+document.getElementById("adminCloseBtn").onclick = closeAdmin;
+adminOverlay.onclick = e => { if (e.target === adminOverlay) closeAdmin(); };
+async function renderUsers() {
+  const wrap = document.getElementById("admin-users");
+  wrap.innerHTML = "読み込み中…";
+  let users;
+  try { users = await api("/api/users", "GET"); }
+  catch (e) { wrap.textContent = e.message; return; }
+  wrap.innerHTML = "";
+  users.forEach(u => {
+    const row = document.createElement("div");
+    row.className = "list-row";
+    const self = u.id === currentUser.id;
+    row.innerHTML = `
+      <span class="name grow">${escapeHtml(u.username)}${self ? "(自分)" : ""}</span>
+      ${u.is_admin ? '<span class="role-pill owner">管理者</span>' : ""}
+      <button class="btn btn-ghost btn-sm" data-act="pw">パスワード変更</button>
+      ${self ? "" : `<button class="btn btn-ghost btn-sm" data-act="del">削除</button>`}`;
+    row.querySelector('[data-act="pw"]').onclick = async () => {
+      const pw = prompt(`${u.username} の新しいパスワード(4文字以上)`);
+      if (!pw) return;
+      try { await api("/api/users", "PUT", "/" + u.id, { password: pw }); alert("変更しました"); }
+      catch (err) { alert(err.message); }
+    };
+    const del = row.querySelector('[data-act="del"]');
+    if (del) del.onclick = async () => {
+      if (!confirm(`ユーザー「${u.username}」を削除しますか?`)) return;
+      try { await api("/api/users", "DELETE", "/" + u.id); await renderUsers(); }
+      catch (err) { document.getElementById("au-error").textContent = err.message; }
+    };
+    wrap.appendChild(row);
+  });
+}
+document.getElementById("createUserForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const errEl = document.getElementById("au-error");
+  errEl.textContent = "";
+  const username = document.getElementById("au-username").value.trim();
+  const password = document.getElementById("au-password").value;
+  const is_admin = document.getElementById("au-admin").checked;
+  if (!username || !password) { errEl.textContent = "ユーザー名とパスワードを入力してください"; return; }
+  try {
+    await api("/api/users", "POST", "", { username, password, is_admin });
+    document.getElementById("au-username").value = "";
+    document.getElementById("au-password").value = "";
+    document.getElementById("au-admin").checked = false;
+    await renderUsers();
+  } catch (err) { errEl.textContent = err.message; }
+});
+
+// Escでモーダルを閉じる(追加分)
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") { closeProjModal(); closeManage(); closeAdmin(); }
+});
+
+boot();
 </script>
 </body>
 </html>
