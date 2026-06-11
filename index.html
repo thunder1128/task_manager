@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>タスク管理</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --card: #ffffff;
+    --text: #172b4d;
+    --muted: #6b778c;
+    --border: #dfe1e6;
+    --accent: #4361ee;
+    --accent-dark: #3a52cc;
+    --done: #36b37e;
+    --p-high: #e5484d;
+    --p-mid: #f0a500;
+    --p-low: #6b778c;
+    --shadow: 0 1px 3px rgba(9,30,66,.13);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  header {
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 20px; font-weight: 700; }
+  header .stats { color: var(--muted); font-size: 13px; }
+  header .spacer { flex: 1; }
+  .btn {
+    border: none; border-radius: 6px; padding: 9px 16px;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: background .15s, opacity .15s;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-dark); }
+  .btn-ghost { background: transparent; color: var(--muted); }
+  .btn-ghost:hover { background: var(--bg); }
+  .btn-sm { padding: 6px 12px; font-size: 13px; }
+
+  .tabs { display: flex; background: var(--bg); border-radius: 8px; padding: 3px; }
+  .tab {
+    border: none; background: transparent; cursor: pointer;
+    padding: 7px 16px; border-radius: 6px; font-size: 14px; font-weight: 600; color: var(--muted);
+  }
+  .tab.active { background: var(--card); color: var(--text); box-shadow: var(--shadow); }
+
+  .toolbar {
+    padding: 16px 24px 0; display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+  }
+  .toolbar input, .toolbar select {
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
+    font-size: 14px; background: var(--card); color: var(--text);
+  }
+  .toolbar input[type="search"] { min-width: 220px; }
+
+  .view { display: none; }
+  .view.active { display: block; }
+
+  /* ---- ボード(かんばん・動的列) ---- */
+  .board {
+    display: flex; gap: 16px; padding: 16px 24px 40px;
+    overflow-x: auto; align-items: flex-start;
+  }
+  .column {
+    background: #ebecf0; border-radius: 10px; padding: 10px;
+    width: 300px; flex: 0 0 300px; display: flex; flex-direction: column;
+  }
+  .column.dragover, .panel.dragover { outline: 2px dashed var(--accent); outline-offset: -2px; }
+  .cards.dragover, .panel-cards.dragover { background: rgba(67,97,238,.06); border-radius: 8px; }
+  .column-head {
+    display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 14px; padding: 6px 4px 10px;
+  }
+  .column-head .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+  .column-head.is-done .dot { background: var(--done); }
+  .column-head .cname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .column-head .count {
+    background: rgba(9,30,66,.08); color: var(--muted);
+    font-size: 12px; border-radius: 10px; padding: 1px 8px; flex: none;
+  }
+  .column-head .col-actions { margin-left: auto; display: flex; gap: 2px; flex: none; }
+  .cards { display: flex; flex-direction: column; gap: 8px; min-height: 20px; }
+
+  .add-column { flex: 0 0 220px; }
+  .add-column button {
+    width: 100%; border: 2px dashed var(--border); background: transparent;
+    border-radius: 10px; padding: 14px; color: var(--muted); font-size: 14px;
+    font-weight: 600; cursor: pointer;
+  }
+  .add-column button:hover { border-color: var(--accent); color: var(--accent); background: rgba(67,97,238,.04); }
+
+  /* ---- バックログ ---- */
+  .backlog-wrap { padding: 16px 24px 40px; display: flex; flex-direction: column; gap: 16px; }
+  .panel { background: #ebecf0; border-radius: 10px; padding: 12px; }
+  .panel.backlog-panel { background: #e3e9f5; }
+  .panel-head { display: flex; align-items: center; gap: 10px; padding: 4px 6px 12px; flex-wrap: wrap; }
+  .panel-head .pname { font-weight: 700; font-size: 15px; }
+  .panel-head .pgoal { color: var(--muted); font-size: 12px; width: 100%; padding-left: 2px; }
+  .panel-head .pdate { color: var(--muted); font-size: 12px; }
+  .panel-head .pactions { display: flex; gap: 4px; }
+  .iter-status { font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 10px; }
+  .iter-status.planned { background: #ebecf0; color: var(--muted); border: 1px solid var(--border); }
+  .iter-status.active  { background: #fff7e6; color: #b87503; }
+  .iter-status.done    { background: #e3fcef; color: var(--done); }
+  .panel-cards { display: flex; flex-direction: column; gap: 8px; min-height: 24px; }
+  .panel-head .count {
+    margin-left: auto; background: rgba(9,30,66,.08); color: var(--muted);
+    font-size: 12px; border-radius: 10px; padding: 1px 8px;
+  }
+
+  /* ---- カード共通 ---- */
+  .card {
+    background: var(--card); border-radius: 8px; padding: 12px;
+    box-shadow: var(--shadow); cursor: grab; border-left: 3px solid transparent;
+  }
+  .card:active { cursor: grabbing; }
+  .card.dragging { opacity: .4; }
+  .card.p-high { border-left-color: var(--p-high); }
+  .card.p-mid  { border-left-color: var(--p-mid); }
+  .card.p-low  { border-left-color: var(--p-low); }
+  .card.done .card-title { text-decoration: line-through; color: var(--muted); }
+
+  .card-title { font-weight: 600; font-size: 14px; word-break: break-word; }
+  .card-desc { font-size: 12px; color: var(--muted); margin-top: 4px; white-space: pre-wrap; word-break: break-word; }
+  .card-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+  .badge-prio.p-high { background: #ffebe6; color: var(--p-high); }
+  .badge-prio.p-mid  { background: #fff7e6; color: #b87503; }
+  .badge-prio.p-low  { background: #ebecf0; color: var(--p-low); }
+  .badge-cat { background: #e9f2ff; color: var(--accent); }
+  .badge-tag { background: #f4f5f7; color: var(--muted); border: 1px solid var(--border); }
+  .badge-due { background: #ebecf0; color: var(--muted); }
+  .badge-due.overdue { background: #ffebe6; color: var(--p-high); }
+  .badge-due.soon { background: #fff7e6; color: #b87503; }
+  .badge-iter { background: #ede7fb; color: #6741d9; }
+  .badge-col { background: #ebecf0; color: var(--muted); }
+  .badge-col.done { background: #e3fcef; color: var(--done); }
+
+  .card-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .icon-btn {
+    border: none; background: transparent; cursor: pointer;
+    color: var(--muted); font-size: 12px; padding: 2px 6px; border-radius: 4px;
+  }
+  .icon-btn:hover { background: var(--bg); color: var(--text); }
+  .icon-btn.danger:hover { background: #ffebe6; color: var(--p-high); }
+  .icon-btn:disabled { opacity: .3; cursor: default; }
+
+  /* ---- モーダル ---- */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(9,30,66,.5);
+    display: none; align-items: flex-start; justify-content: center;
+    padding: 60px 16px; z-index: 50; overflow-y: auto;
+  }
+  .overlay.open { display: flex; }
+  .modal {
+    background: var(--card); border-radius: 10px; width: 100%; max-width: 480px;
+    padding: 24px; box-shadow: 0 8px 24px rgba(9,30,66,.25);
+  }
+  .modal h2 { font-size: 18px; margin-bottom: 16px; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; color: var(--muted); }
+  .field input, .field textarea, .field select {
+    width: 100%; border: 1px solid var(--border); border-radius: 6px;
+    padding: 9px 10px; font-size: 14px; font-family: inherit; color: var(--text);
+  }
+  .field textarea { resize: vertical; min-height: 64px; }
+  .field-row { display: flex; gap: 12px; }
+  .field-row .field { flex: 1; }
+  .check { display: flex; align-items: center; gap: 8px; }
+  .check input { width: auto; }
+  .check label { margin: 0; }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+  .empty { text-align: center; color: var(--muted); font-size: 13px; padding: 16px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📋 タスク管理</h1>
+  <span class="stats" id="stats"></span>
+  <span class="spacer"></span>
+  <div class="tabs">
+    <button class="tab active" data-view="board" id="tab-board">かんばん</button>
+    <button class="tab" data-view="backlog" id="tab-backlog">バックログ</button>
+  </div>
+  <button class="btn btn-primary" id="addBtn">+ 新規タスク</button>
+</header>
+
+<!-- ボード用ツールバー -->
+<div class="toolbar" id="toolbar">
+  <input type="search" id="search" placeholder="🔍 タイトル・説明で検索">
+  <select id="filterPriority">
+    <option value="">優先度: すべて</option>
+    <option value="high">高</option>
+    <option value="mid">中</option>
+    <option value="low">低</option>
+  </select>
+  <select id="filterCategory"><option value="">カテゴリ: すべて</option></select>
+  <select id="filterTag"><option value="">タグ: すべて</option></select>
+  <select id="filterIteration"><option value="">イテレーション: すべて</option></select>
+</div>
+
+<!-- ボードビュー(列はJSで動的生成) -->
+<div class="view active" id="view-board">
+  <div class="board" id="board"></div>
+</div>
+
+<!-- バックログビュー -->
+<div class="view" id="view-backlog">
+  <div class="toolbar">
+    <strong style="font-size:15px;">イテレーション計画</strong>
+    <span class="spacer"></span>
+    <button class="btn btn-primary btn-sm" id="addIterBtn">+ イテレーション追加</button>
+  </div>
+  <div class="backlog-wrap" id="backlogWrap"></div>
+</div>
+
+<!-- タスクモーダル -->
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <h2 id="modalTitle">新規タスク</h2>
+    <form id="taskForm">
+      <input type="hidden" id="taskId">
+      <div class="field">
+        <label for="f-title">タイトル *</label>
+        <input type="text" id="f-title" required maxlength="200" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="f-desc">説明</label>
+        <textarea id="f-desc" maxlength="2000"></textarea>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="f-column">列(ステータス)</label>
+          <select id="f-column"></select>
+        </div>
+        <div class="field">
+          <label for="f-priority">優先度</label>
+          <select id="f-priority">
+            <option value="high">高</option>
+            <option value="mid" selected>中</option>
+            <option value="low">低</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="f-iteration">イテレーション</label>
+        <select id="f-iteration"><option value="">バックログ(未割り当て)</option></select>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="f-due">期限</label>
+          <input type="date" id="f-due">
+        </div>
+        <div class="field">
+          <label for="f-category">カテゴリ</label>
+          <input type="text" id="f-category" maxlength="40" autocomplete="off" placeholder="例: 開発">
+        </div>
+      </div>
+      <div class="field">
+        <label for="f-tags">タグ(カンマ区切り)</label>
+        <input type="text" id="f-tags" autocomplete="off" placeholder="例: 緊急, 顧客A">
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="cancelBtn">キャンセル</button>
+        <button type="submit" class="btn btn-primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- 列モーダル -->
+<div class="overlay" id="colOverlay">
+  <div class="modal">
+    <h2 id="colModalTitle">新規列</h2>
+    <form id="colForm">
+      <input type="hidden" id="colId">
+      <div class="field">
+        <label for="c-name">列名 *</label>
+        <input type="text" id="c-name" required maxlength="40" autocomplete="off" placeholder="例: レビュー中">
+      </div>
+      <div class="field check">
+        <input type="checkbox" id="c-done">
+        <label for="c-done">この列に入ったタスクを「完了」として扱う(進捗率・取り消し線に反映)</label>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="colCancelBtn">キャンセル</button>
+        <button type="submit" class="btn btn-primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- イテレーションモーダル -->
+<div class="overlay" id="iterOverlay">
+  <div class="modal">
+    <h2 id="iterModalTitle">新規イテレーション</h2>
+    <form id="iterForm">
+      <input type="hidden" id="iterId">
+      <div class="field">
+        <label for="i-name">名前 *</label>
+        <input type="text" id="i-name" required maxlength="80" autocomplete="off" placeholder="例: Sprint 1">
+      </div>
+      <div class="field">
+        <label for="i-goal">ゴール</label>
+        <textarea id="i-goal" maxlength="500" placeholder="このイテレーションで達成したいこと"></textarea>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="i-start">開始日</label>
+          <input type="date" id="i-start">
+        </div>
+        <div class="field">
+          <label for="i-end">終了日</label>
+          <input type="date" id="i-end">
+        </div>
+      </div>
+      <div class="field">
+        <label for="i-status">状態</label>
+        <select id="i-status">
+          <option value="planned">計画中</option>
+          <option value="active">進行中</option>
+          <option value="done">完了</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="iterCancelBtn">キャンセル</button>
+        <button type="submit" class="btn btn-primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+const TASK_API = "/api/tasks";
+const COL_API = "/api/columns";
+const ITER_API = "/api/iterations";
+const PRIO_LABEL = { high: "高", mid: "中", low: "低" };
+const ITER_STATUS_LABEL = { planned: "計画中", active: "進行中", done: "完了" };
+
+let tasks = [];
+let columns = [];
+let iterations = [];
+let currentView = "board";
+let dropDone = false;
+
+// ---- API ----
+async function api(base, method, path = "", body) {
+  const opts = { method, headers: { "Content-Type": "application/json" } };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(base + path, opts);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+async function load() {
+  try {
+    [tasks, columns, iterations] = await Promise.all([
+      api(TASK_API, "GET"),
+      api(COL_API, "GET"),
+      api(ITER_API, "GET"),
+    ]);
+    render();
+  } catch (e) {
+    alert("読み込みに失敗しました: " + e.message);
+  }
+}
+
+// ---- ユーティリティ ----
+function escapeHtml(s) {
+  return (s || "").replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function fmtDue(due) {
+  if (!due) return null;
+  const d = new Date(due + "T00:00:00");
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const diff = Math.round((d - today) / 86400000);
+  let cls = "", label = `${d.getMonth() + 1}/${d.getDate()}`;
+  if (diff < 0) { cls = "overdue"; label += ` (${-diff}日超過)`; }
+  else if (diff === 0) { cls = "soon"; label += " (今日)"; }
+  else if (diff <= 2) { cls = "soon"; label += ` (あと${diff}日)`; }
+  return { cls, label };
+}
+function fmtDateShort(d) {
+  if (!d) return "";
+  const dt = new Date(d + "T00:00:00");
+  return `${dt.getMonth() + 1}/${dt.getDate()}`;
+}
+function iterName(id) { const it = iterations.find(i => i.id === id); return it ? it.name : null; }
+function columnById(id) { return columns.find(c => c.id === id) || null; }
+function isDoneTask(t) { const c = columnById(t.column_id); return !!(c && c.is_done); }
+
+// ---- フィルター(ボード) ----
+function getFilters() {
+  return {
+    q: document.getElementById("search").value.trim().toLowerCase(),
+    priority: document.getElementById("filterPriority").value,
+    category: document.getElementById("filterCategory").value,
+    tag: document.getElementById("filterTag").value,
+    iteration: document.getElementById("filterIteration").value,
+  };
+}
+function matchFilter(t, f) {
+  if (f.q && !(t.title.toLowerCase().includes(f.q) ||
+      (t.description || "").toLowerCase().includes(f.q))) return false;
+  if (f.priority && t.priority !== f.priority) return false;
+  if (f.category && t.category !== f.category) return false;
+  if (f.tag && !(t.tags || []).includes(f.tag)) return false;
+  if (f.iteration === "none" && t.iteration_id != null) return false;
+  if (f.iteration && f.iteration !== "none" && String(t.iteration_id) !== f.iteration) return false;
+  return true;
+}
+
+// ---- 描画 ----
+function render() {
+  refreshFilterOptions();
+  refreshIterationSelects();
+  refreshColumnSelect();
+  if (currentView === "board") renderBoard();
+  else renderBacklog();
+  renderStats();
+}
+
+function renderStats() {
+  const total = tasks.length;
+  const done = tasks.filter(isDoneTask).length;
+  document.getElementById("stats").textContent =
+    total ? `全${total}件 / 完了${done}件 (${Math.round(done / total * 100)}%) ・ 列${columns.length} ・ イテレーション${iterations.length}`
+          : "タスクはまだありません";
+}
+
+function renderBoard() {
+  const f = getFilters();
+  const board = document.getElementById("board");
+  board.innerHTML = "";
+
+  columns.forEach((col, idx) => {
+    const colEl = document.createElement("div");
+    colEl.className = "column";
+
+    const items = tasks
+      .filter(t => t.column_id === col.id && matchFilter(t, f))
+      .sort((a, b) => a.position - b.position);
+
+    const head = document.createElement("div");
+    head.className = "column-head" + (col.is_done ? " is-done" : "");
+    head.innerHTML = `
+      <span class="dot"></span>
+      <span class="cname">${escapeHtml(col.name)}</span>
+      <span class="count">${items.length}</span>
+      <span class="col-actions">
+        <button class="icon-btn" data-act="left" title="左へ" ${idx === 0 ? "disabled" : ""}>◀</button>
+        <button class="icon-btn" data-act="right" title="右へ" ${idx === columns.length - 1 ? "disabled" : ""}>▶</button>
+        <button class="icon-btn" data-act="edit" title="編集">✎</button>
+        <button class="icon-btn danger" data-act="del" title="削除">🗑</button>
+      </span>`;
+    head.querySelector('[data-act="left"]').onclick = () => moveColumn(col, -1);
+    head.querySelector('[data-act="right"]').onclick = () => moveColumn(col, 1);
+    head.querySelector('[data-act="edit"]').onclick = () => openColModal(col);
+    head.querySelector('[data-act="del"]').onclick = () => delColumn(col);
+    colEl.appendChild(head);
+
+    const list = document.createElement("div");
+    list.className = "cards";
+    if (items.length === 0) {
+      const e = document.createElement("div");
+      e.className = "empty"; e.textContent = "タスクなし";
+      list.appendChild(e);
+    }
+    items.forEach(t => list.appendChild(cardEl(t, "board")));
+    colEl.appendChild(list);
+    setupDropList(list, { field: "column_id", value: col.id });
+
+    board.appendChild(colEl);
+  });
+
+  // 列追加タイル
+  const add = document.createElement("div");
+  add.className = "add-column";
+  add.innerHTML = `<button>+ 列を追加</button>`;
+  add.querySelector("button").onclick = () => openColModal(null);
+  board.appendChild(add);
+}
+
+function renderBacklog() {
+  const wrap = document.getElementById("backlogWrap");
+  wrap.innerHTML = "";
+  wrap.appendChild(panelEl(
+    { id: null, title: "📥 プロダクトバックログ", isBacklog: true },
+    tasks.filter(t => t.iteration_id == null)
+  ));
+  iterations.forEach(it => {
+    wrap.appendChild(panelEl({ id: it.id, iter: it }, tasks.filter(t => t.iteration_id === it.id)));
+  });
+}
+
+function panelEl(meta, items) {
+  const panel = document.createElement("div");
+  panel.className = "panel" + (meta.isBacklog ? " backlog-panel" : "");
+
+  const head = document.createElement("div");
+  head.className = "panel-head";
+  if (meta.isBacklog) {
+    head.innerHTML = `<span class="pname">${meta.title}</span><span class="count">${items.length}</span>`;
+  } else {
+    const it = meta.iter;
+    const done = items.filter(isDoneTask).length;
+    const range = (it.start_date || it.end_date)
+      ? `<span class="pdate">${fmtDateShort(it.start_date) || "?"} 〜 ${fmtDateShort(it.end_date) || "?"}</span>` : "";
+    head.innerHTML = `
+      <span class="pname">${escapeHtml(it.name)}</span>
+      <span class="iter-status ${it.status}">${ITER_STATUS_LABEL[it.status]}</span>
+      ${range}
+      <span class="count">${done}/${items.length}</span>
+      <span class="pactions">
+        <button class="icon-btn" data-act="edit-iter">✎ 編集</button>
+        <button class="icon-btn danger" data-act="del-iter">🗑 削除</button>
+      </span>
+      ${it.goal ? `<span class="pgoal">🎯 ${escapeHtml(it.goal)}</span>` : ""}`;
+    head.querySelector('[data-act="edit-iter"]').onclick = () => openIterModal(it);
+    head.querySelector('[data-act="del-iter"]').onclick = () => delIteration(it);
+  }
+  panel.appendChild(head);
+
+  const body = document.createElement("div");
+  body.className = "panel-cards";
+  if (items.length === 0) {
+    const e = document.createElement("div");
+    e.className = "empty"; e.textContent = "ここにタスクをドラッグ";
+    body.appendChild(e);
+  }
+  items.sort((a, b) => a.position - b.position).forEach(t => body.appendChild(cardEl(t, "backlog")));
+  panel.appendChild(body);
+
+  setupDropList(body, { field: "iteration_id", value: meta.id });
+  return panel;
+}
+
+function cardEl(t, ctx) {
+  const el = document.createElement("div");
+  el.className = `card p-${t.priority}` + (isDoneTask(t) ? " done" : "");
+  el.draggable = true;
+  el.dataset.id = t.id;
+
+  let meta = `<span class="badge badge-prio p-${t.priority}">${PRIO_LABEL[t.priority]}</span>`;
+  if (ctx === "backlog") {
+    const c = columnById(t.column_id);
+    if (c) meta += `<span class="badge badge-col ${c.is_done ? "done" : ""}">${escapeHtml(c.name)}</span>`;
+  }
+  const due = fmtDue(t.due_date);
+  if (due) meta += `<span class="badge badge-due ${due.cls}">📅 ${due.label}</span>`;
+  if (t.category) meta += `<span class="badge badge-cat">${escapeHtml(t.category)}</span>`;
+  if (ctx === "board" && t.iteration_id != null) {
+    const n = iterName(t.iteration_id);
+    if (n) meta += `<span class="badge badge-iter">🔁 ${escapeHtml(n)}</span>`;
+  }
+  (t.tags || []).forEach(tag => meta += `<span class="badge badge-tag">#${escapeHtml(tag)}</span>`);
+
+  const moveBtn = ctx === "board" ? `<button class="icon-btn" data-act="move">→ 次の列</button>` : "";
+
+  el.innerHTML = `
+    <div class="card-title">${escapeHtml(t.title)}</div>
+    ${t.description ? `<div class="card-desc">${escapeHtml(t.description)}</div>` : ""}
+    <div class="card-meta">${meta}</div>
+    <div class="card-actions">
+      <button class="icon-btn" data-act="edit">✎ 編集</button>
+      ${moveBtn}
+      <button class="icon-btn danger" data-act="del">🗑 削除</button>
+    </div>`;
+
+  el.querySelector('[data-act="edit"]').onclick = () => openModal(t);
+  el.querySelector('[data-act="del"]').onclick = () => delTask(t.id);
+  const mb = el.querySelector('[data-act="move"]');
+  if (mb) mb.onclick = () => cycleColumn(t);
+
+  el.addEventListener("dragstart", e => {
+    dropDone = false;
+    el.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", String(t.id));
+  });
+  el.addEventListener("dragend", () => {
+    el.classList.remove("dragging");
+    if (!dropDone) render();
+  });
+  return el;
+}
+
+function refreshFilterOptions() {
+  const cats = [...new Set(tasks.map(t => t.category).filter(Boolean))].sort();
+  const tags = [...new Set(tasks.flatMap(t => t.tags || []))].sort();
+  syncSelect("filterCategory", cats.map(v => [v, v]), "カテゴリ: すべて");
+  syncSelect("filterTag", tags.map(v => [v, v]), "タグ: すべて");
+  const iterOpts = [["none", "バックログ(未割り当て)"]].concat(iterations.map(i => [String(i.id), i.name]));
+  syncSelect("filterIteration", iterOpts, "イテレーション: すべて");
+}
+function refreshIterationSelects() {
+  const sel = document.getElementById("f-iteration");
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">バックログ(未割り当て)</option>` +
+    iterations.map(i => `<option value="${i.id}">${escapeHtml(i.name)}</option>`).join("");
+  sel.value = cur;
+}
+function refreshColumnSelect() {
+  const sel = document.getElementById("f-column");
+  const cur = sel.value;
+  sel.innerHTML = columns.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("");
+  if (columns.some(c => String(c.id) === cur)) sel.value = cur;
+}
+function syncSelect(id, pairs, placeholder) {
+  const sel = document.getElementById(id);
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">${placeholder}</option>` +
+    pairs.map(([v, label]) => `<option value="${escapeHtml(v)}">${escapeHtml(label)}</option>`).join("");
+  if (pairs.some(([v]) => v === cur)) sel.value = cur;
+}
+
+// ---- タスク操作 ----
+function cycleColumn(t) {
+  if (columns.length < 2) return;
+  const idx = columns.findIndex(c => c.id === t.column_id);
+  const next = columns[(idx + 1) % columns.length];
+  updateTask(t.id, { column_id: next.id });
+}
+async function updateTask(id, patch) {
+  try {
+    const updated = await api(TASK_API, "PUT", "/" + id, patch);
+    const i = tasks.findIndex(t => t.id === id);
+    if (i >= 0) tasks[i] = updated;
+    render();
+  } catch (e) { alert("更新に失敗: " + e.message); }
+}
+async function delTask(id) {
+  if (!confirm("このタスクを削除しますか?")) return;
+  try {
+    await api(TASK_API, "DELETE", "/" + id);
+    tasks = tasks.filter(t => t.id !== id);
+    render();
+  } catch (e) { alert("削除に失敗: " + e.message); }
+}
+
+// ---- タスクモーダル ----
+const overlay = document.getElementById("overlay");
+const form = document.getElementById("taskForm");
+function openModal(t, presetCol) {
+  document.getElementById("modalTitle").textContent = t ? "タスクを編集" : "新規タスク";
+  document.getElementById("taskId").value = t ? t.id : "";
+  document.getElementById("f-title").value = t ? t.title : "";
+  document.getElementById("f-desc").value = t ? t.description : "";
+  document.getElementById("f-priority").value = t ? t.priority : "mid";
+  refreshColumnSelect();
+  document.getElementById("f-column").value =
+    String(t ? t.column_id : (presetCol != null ? presetCol : (columns[0] && columns[0].id)));
+  refreshIterationSelects();
+  document.getElementById("f-iteration").value =
+    t ? (t.iteration_id != null ? String(t.iteration_id) : "") : "";
+  document.getElementById("f-due").value = t ? (t.due_date || "") : "";
+  document.getElementById("f-category").value = t ? t.category : "";
+  document.getElementById("f-tags").value = t ? (t.tags || []).join(", ") : "";
+  overlay.classList.add("open");
+  document.getElementById("f-title").focus();
+}
+function closeModal() { overlay.classList.remove("open"); }
+form.addEventListener("submit", async e => {
+  e.preventDefault();
+  const id = document.getElementById("taskId").value;
+  const iterVal = document.getElementById("f-iteration").value;
+  const payload = {
+    title: document.getElementById("f-title").value.trim(),
+    description: document.getElementById("f-desc").value.trim(),
+    column_id: Number(document.getElementById("f-column").value),
+    priority: document.getElementById("f-priority").value,
+    iteration_id: iterVal === "" ? null : Number(iterVal),
+    due_date: document.getElementById("f-due").value || null,
+    category: document.getElementById("f-category").value.trim(),
+    tags: document.getElementById("f-tags").value.split(",").map(s => s.trim()).filter(Boolean),
+  };
+  if (!payload.title) return;
+  try {
+    if (id) await updateTask(Number(id), payload);
+    else { const created = await api(TASK_API, "POST", "", payload); tasks.push(created); render(); }
+    closeModal();
+  } catch (err) { alert("保存に失敗: " + err.message); }
+});
+
+// ---- 列操作 ----
+const colOverlay = document.getElementById("colOverlay");
+const colForm = document.getElementById("colForm");
+function openColModal(col) {
+  document.getElementById("colModalTitle").textContent = col ? "列を編集" : "新規列";
+  document.getElementById("colId").value = col ? col.id : "";
+  document.getElementById("c-name").value = col ? col.name : "";
+  document.getElementById("c-done").checked = col ? !!col.is_done : false;
+  colOverlay.classList.add("open");
+  document.getElementById("c-name").focus();
+}
+function closeColModal() { colOverlay.classList.remove("open"); }
+colForm.addEventListener("submit", async e => {
+  e.preventDefault();
+  const id = document.getElementById("colId").value;
+  const payload = {
+    name: document.getElementById("c-name").value.trim(),
+    is_done: document.getElementById("c-done").checked,
+  };
+  if (!payload.name) return;
+  try {
+    if (id) await api(COL_API, "PUT", "/" + id, payload);
+    else await api(COL_API, "POST", "", payload);
+    await load();
+    closeColModal();
+  } catch (err) { alert("保存に失敗: " + err.message); }
+});
+async function moveColumn(col, dir) {
+  const idx = columns.findIndex(c => c.id === col.id);
+  const swap = idx + dir;
+  if (swap < 0 || swap >= columns.length) return;
+  const ids = columns.map(c => c.id);
+  [ids[idx], ids[swap]] = [ids[swap], ids[idx]];
+  try {
+    columns = await api(COL_API, "POST", "/reorder", { ids });
+    render();
+  } catch (e) { alert("並び替えに失敗: " + e.message); }
+}
+async function delColumn(col) {
+  if (columns.length <= 1) { alert("最後の列は削除できません。"); return; }
+  const n = tasks.filter(t => t.column_id === col.id).length;
+  const msg = n > 0
+    ? `列「${col.name}」を削除しますか?\n中の${n}件のタスクは隣の列へ移動します(削除されません)。`
+    : `列「${col.name}」を削除しますか?`;
+  if (!confirm(msg)) return;
+  try {
+    await api(COL_API, "DELETE", "/" + col.id);
+    await load();
+  } catch (e) { alert("削除に失敗: " + e.message); }
+}
+
+// ---- イテレーション操作 ----
+const iterOverlay = document.getElementById("iterOverlay");
+const iterForm = document.getElementById("iterForm");
+function openIterModal(it) {
+  document.getElementById("iterModalTitle").textContent = it ? "イテレーションを編集" : "新規イテレーション";
+  document.getElementById("iterId").value = it ? it.id : "";
+  document.getElementById("i-name").value = it ? it.name : "";
+  document.getElementById("i-goal").value = it ? it.goal : "";
+  document.getElementById("i-start").value = it ? (it.start_date || "") : "";
+  document.getElementById("i-end").value = it ? (it.end_date || "") : "";
+  document.getElementById("i-status").value = it ? it.status : "planned";
+  iterOverlay.classList.add("open");
+  document.getElementById("i-name").focus();
+}
+function closeIterModal() { iterOverlay.classList.remove("open"); }
+iterForm.addEventListener("submit", async e => {
+  e.preventDefault();
+  const id = document.getElementById("iterId").value;
+  const payload = {
+    name: document.getElementById("i-name").value.trim(),
+    goal: document.getElementById("i-goal").value.trim(),
+    start_date: document.getElementById("i-start").value || null,
+    end_date: document.getElementById("i-end").value || null,
+    status: document.getElementById("i-status").value,
+  };
+  if (!payload.name) return;
+  try {
+    if (id) {
+      const updated = await api(ITER_API, "PUT", "/" + id, payload);
+      const i = iterations.findIndex(x => x.id === Number(id));
+      if (i >= 0) iterations[i] = updated;
+    } else {
+      const created = await api(ITER_API, "POST", "", payload);
+      iterations.push(created);
+    }
+    render();
+    closeIterModal();
+  } catch (err) { alert("保存に失敗: " + err.message); }
+});
+async function delIteration(it) {
+  const n = tasks.filter(t => t.iteration_id === it.id).length;
+  const msg = n > 0
+    ? `「${it.name}」を削除しますか?\n配下の${n}件のタスクはプロダクトバックログに戻ります(削除されません)。`
+    : `「${it.name}」を削除しますか?`;
+  if (!confirm(msg)) return;
+  try {
+    await api(ITER_API, "DELETE", "/" + it.id);
+    iterations = iterations.filter(x => x.id !== it.id);
+    tasks.forEach(t => { if (t.iteration_id === it.id) t.iteration_id = null; });
+    render();
+  } catch (e) { alert("削除に失敗: " + e.message); }
+}
+
+// ---- ビュー切替 ----
+function switchView(view) {
+  currentView = view;
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.view === view));
+  document.getElementById("view-board").classList.toggle("active", view === "board");
+  document.getElementById("view-backlog").classList.toggle("active", view === "backlog");
+  document.getElementById("toolbar").style.display = view === "board" ? "flex" : "none";
+  render();
+}
+document.querySelectorAll(".tab").forEach(b => b.onclick = () => switchView(b.dataset.view));
+
+// ---- イベント結線 ----
+document.getElementById("addBtn").onclick = () => openModal(null);
+document.getElementById("addIterBtn").onclick = () => openIterModal(null);
+document.getElementById("cancelBtn").onclick = closeModal;
+document.getElementById("colCancelBtn").onclick = closeColModal;
+document.getElementById("iterCancelBtn").onclick = closeIterModal;
+overlay.onclick = e => { if (e.target === overlay) closeModal(); };
+colOverlay.onclick = e => { if (e.target === colOverlay) closeColModal(); };
+iterOverlay.onclick = e => { if (e.target === iterOverlay) closeIterModal(); };
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") { closeModal(); closeColModal(); closeIterModal(); }
+});
+["search", "filterPriority", "filterCategory", "filterTag", "filterIteration"].forEach(id =>
+  document.getElementById(id).addEventListener("input", () => { if (currentView === "board") renderBoard(); }));
+
+// ---- ドラッグ&ドロップ(並び替え + グループ移動) ----
+function getDragAfterElement(container, y) {
+  const els = [...container.querySelectorAll(".card:not(.dragging)")];
+  let closest = { offset: -Infinity, element: null };
+  for (const child of els) {
+    const box = child.getBoundingClientRect();
+    const offset = y - box.top - box.height / 2;
+    if (offset < 0 && offset > closest.offset) closest = { offset, element: child };
+  }
+  return closest.element;
+}
+function setupDropList(container, group) {
+  container.addEventListener("dragover", e => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    container.classList.add("dragover");
+    const dragging = document.querySelector(".card.dragging");
+    if (!dragging) return;
+    const ph = container.querySelector(".empty");
+    if (ph) ph.remove();
+    const after = getDragAfterElement(container, e.clientY);
+    if (after == null) container.appendChild(dragging);
+    else container.insertBefore(dragging, after);
+  });
+  container.addEventListener("dragleave", e => {
+    if (!container.contains(e.relatedTarget)) container.classList.remove("dragover");
+  });
+  container.addEventListener("drop", async e => {
+    e.preventDefault();
+    dropDone = true;
+    container.classList.remove("dragover");
+    const id = Number(e.dataTransfer.getData("text/plain"));
+    if (!id) return;
+    const ids = [...container.querySelectorAll(".card")].map(c => Number(c.dataset.id));
+    const t = tasks.find(x => x.id === id);
+    const payload = { ids, moved_id: id };
+    if (t) {
+      if (group.field === "column_id" && t.column_id !== group.value) payload.column_id = group.value;
+      if (group.field === "iteration_id" && (t.iteration_id ?? null) !== (group.value ?? null))
+        payload.iteration_id = group.value;
+    }
+    try {
+      tasks = await api(TASK_API, "POST", "/reorder", payload);
+      render();
+    } catch (err) { alert("並び替えの保存に失敗: " + err.message); render(); }
+  });
+}
+
+load();
+</script>
+</body>
+</html>
