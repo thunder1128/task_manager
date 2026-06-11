@@ -1,0 +1,6 @@
+# Python のバイトコードキャッシュ
+__pycache__/
+*.pyc
+
+# 実行時に自動生成されるデータベース(初回起動時に server.py が作成する)
+tasks.db
