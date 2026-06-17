@@ -561,12 +561,14 @@ function escapeHtml(s) {
   return (s || "").replace(/[&<>"']/g, c =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
-function fmtDue(due) {
+function fmtDue(due, done) {
   if (!due) return null;
   const d = new Date(due + "T00:00:00");
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const diff = Math.round((d - today) / 86400000);
   let cls = "", label = `${d.getMonth() + 1}/${d.getDate()}`;
+  // 完了タスクは超過・期限間近などの緊急表示を出さない(素の日付のみ)
+  if (done) return { cls: "", label };
   if (diff < 0) { cls = "overdue"; label += ` (${-diff}日超過)`; }
   else if (diff === 0) { cls = "soon"; label += " (今日)"; }
   else if (diff <= 2) { cls = "soon"; label += ` (あと${diff}日)`; }
@@ -738,7 +740,7 @@ function cardEl(t, ctx) {
     const c = columnById(t.column_id);
     if (c) meta += `<span class="badge badge-col ${c.is_done ? "done" : ""}">${escapeHtml(c.name)}</span>`;
   }
-  const due = fmtDue(t.due_date);
+  const due = fmtDue(t.due_date, isDoneTask(t));
   if (due) meta += `<span class="badge badge-due ${due.cls}">📅 ${due.label}</span>`;
   if (t.category) meta += `<span class="badge badge-cat">${escapeHtml(t.category)}</span>`;
   if (ctx === "board" && t.iteration_id != null) {
