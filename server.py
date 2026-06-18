@@ -87,6 +87,8 @@ VALID_PRIORITY = {"low", "mid", "high"}
 VALID_ITER_STATUS = {"planned", "active", "done"}
 # 初期かんばん列 (名前, 完了扱いか)。プロジェクト作成時にシードする
 DEFAULT_COLUMNS = [("未着手", 0), ("進行中", 0), ("完了", 1)]
+# 初期のタスク種別。プロジェクト作成時にシードする(管理画面で追加/削除できる)
+DEFAULT_TASK_TYPES = ["機能", "バグ", "改善"]
 # 旧status文字列 → 初期列インデックスの対応(マイグレーション用)
 LEGACY_STATUS_INDEX = {"todo": 0, "doing": 1, "done": 2}
 
@@ -170,6 +172,15 @@ def init_db():
             tags        TEXT    NOT NULL DEFAULT '',
             column_id   INTEGER,
             iteration_id INTEGER,
+            type_id     INTEGER,
+            position    INTEGER NOT NULL DEFAULT 0,
+            created_at  TEXT    NOT NULL,
+            updated_at  TEXT    NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS task_types (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            name        TEXT    NOT NULL,
             position    INTEGER NOT NULL DEFAULT 0,
             created_at  TEXT    NOT NULL,
             updated_at  TEXT    NOT NULL
@@ -202,6 +213,11 @@ def init_db():
     pcols = [r[1] for r in conn.execute("PRAGMA table_info(projects)").fetchall()]
     if "slack_webhook_url" not in pcols:
         conn.execute("ALTER TABLE projects ADD COLUMN slack_webhook_url TEXT NOT NULL DEFAULT ''")
+
+    # 既存DBへのマイグレーション: tasks に種別(type_id)列を追加
+    tcols = [r[1] for r in conn.execute("PRAGMA table_info(tasks)").fetchall()]
+    if "type_id" not in tcols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN type_id INTEGER")
 
     # 管理者アカウントのブートストラップ(ユーザーが1人もいない初回のみ)
     if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
@@ -344,6 +360,20 @@ def sanitize_column_id(value, conn, project_id, default=None):
     if default in ids:
         return default
     return ids[0] if ids else None
+
+
+def sanitize_type_id(value, conn, project_id):
+    """種別IDを正規化。未指定/不正/他プロジェクトのものは None。"""
+    if value in (None, "", "null"):
+        return None
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return None
+    row = conn.execute(
+        "SELECT id FROM task_types WHERE id = ? AND project_id = ?", (v, project_id)
+    ).fetchone()
+    return v if row else None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -494,6 +524,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.list_columns(user)
         if path == "/api/iterations":
             return self.list_iterations(user)
+        if path == "/api/task_types":
+            return self.list_task_types(user)
         return self._send_json({"error": "not found"}, 404)
 
     def do_POST(self):
@@ -524,6 +556,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.create_column(user)
         if path == "/api/iterations":
             return self.create_iteration(user)
+        if path == "/api/task_types":
+            return self.create_task_type(user)
         return self._send_json({"error": "not found"}, 404)
 
     def do_PUT(self):
@@ -546,6 +580,9 @@ class Handler(BaseHTTPRequestHandler):
         m = re.match(r"^/api/iterations/(\d+)$", path)
         if m:
             return self.update_iteration(user, int(m.group(1)))
+        m = re.match(r"^/api/task_types/(\d+)$", path)
+        if m:
+            return self.update_task_type(user, int(m.group(1)))
         return self._send_json({"error": "not found"}, 404)
 
     def do_DELETE(self):
@@ -571,6 +608,9 @@ class Handler(BaseHTTPRequestHandler):
         m = re.match(r"^/api/iterations/(\d+)$", path)
         if m:
             return self.delete_iteration(user, int(m.group(1)))
+        m = re.match(r"^/api/task_types/(\d+)$", path)
+        if m:
+            return self.delete_task_type(user, int(m.group(1)))
         return self._send_json({"error": "not found"}, 404)
 
     # ================= ユーザー管理(管理者のみ) =================
@@ -736,6 +776,13 @@ class Handler(BaseHTTPRequestHandler):
                 "INSERT INTO columns (project_id, name, is_done, position, created_at, updated_at)"
                 " VALUES (?,?,?,?,?,?)",
                 (pid, cname, is_done, i, ts, ts),
+            )
+        # 既定のタスク種別をシード
+        for i, tname in enumerate(DEFAULT_TASK_TYPES):
+            conn.execute(
+                "INSERT INTO task_types (project_id, name, position, created_at, updated_at)"
+                " VALUES (?,?,?,?,?)",
+                (pid, tname, i, ts, ts),
             )
         conn.commit()
         row = conn.execute("SELECT * FROM projects WHERE id = ?", (pid,)).fetchone()
@@ -943,8 +990,8 @@ class Handler(BaseHTTPRequestHandler):
         cur = conn.execute(
             """INSERT INTO tasks
                (project_id, title, description, priority, due_date, category, tags,
-                column_id, iteration_id, position, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                column_id, iteration_id, type_id, position, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 pid,
                 title,
@@ -955,6 +1002,7 @@ class Handler(BaseHTTPRequestHandler):
                 tags,
                 column_id,
                 sanitize_iteration_id(data.get("iteration_id"), conn, pid),
+                sanitize_type_id(data.get("type_id"), conn, pid),
                 maxpos + 1,
                 ts,
                 ts,
@@ -1023,6 +1071,8 @@ class Handler(BaseHTTPRequestHandler):
             )
         if "iteration_id" in data:
             fields["iteration_id"] = sanitize_iteration_id(data.get("iteration_id"), conn, pid)
+        if "type_id" in data:
+            fields["type_id"] = sanitize_type_id(data.get("type_id"), conn, pid)
         if "position" in data:
             try:
                 fields["position"] = int(data.get("position"))
@@ -1339,6 +1389,103 @@ class Handler(BaseHTTPRequestHandler):
             (iter_id, pid),
         )
         conn.execute("DELETE FROM iterations WHERE id = ?", (iter_id,))
+        conn.commit()
+        conn.close()
+        self._send_json({"ok": True})
+
+    # ================= 種別(タスクタイプ)API =================
+    def list_task_types(self, user):
+        project_id = self._query().get("project_id", [None])[0]
+        conn = get_db()
+        pid, err = self._resolve_project(conn, user, project_id)
+        if err:
+            conn.close()
+            return self._send_json(err[0], err[1])
+        rows = conn.execute(
+            "SELECT * FROM task_types WHERE project_id = ? ORDER BY position ASC, id ASC", (pid,)
+        ).fetchall()
+        conn.close()
+        self._send_json([dict(r) for r in rows])
+
+    def create_task_type(self, user):
+        data = self._read_json()
+        if data is None:
+            return self._send_json({"error": "invalid json"}, 400)
+        name = (data.get("name") or "").strip()
+        if not name:
+            return self._send_json({"error": "name is required"}, 400)
+        conn = get_db()
+        pid, err = self._resolve_project(conn, user, data.get("project_id"))
+        if err:
+            conn.close()
+            return self._send_json(err[0], err[1])
+        ts = now_iso()
+        maxpos = conn.execute(
+            "SELECT COALESCE(MAX(position), -1) FROM task_types WHERE project_id = ?", (pid,)
+        ).fetchone()[0]
+        cur = conn.execute(
+            "INSERT INTO task_types (project_id, name, position, created_at, updated_at)"
+            " VALUES (?,?,?,?,?)",
+            (pid, name, maxpos + 1, ts, ts),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM task_types WHERE id = ?", (cur.lastrowid,)).fetchone()
+        conn.close()
+        self._send_json(dict(row), 201)
+
+    def update_task_type(self, user, type_id):
+        data = self._read_json()
+        if data is None:
+            return self._send_json({"error": "invalid json"}, 400)
+        conn = get_db()
+        existing = conn.execute("SELECT * FROM task_types WHERE id = ?", (type_id,)).fetchone()
+        if existing is None:
+            conn.close()
+            return self._send_json({"error": "not found"}, 404)
+        if not self._require_member(conn, existing["project_id"], user):
+            conn.close()
+            return self._send_json({"error": "アクセス権がありません"}, 403)
+        fields = {}
+        if "name" in data:
+            n = (data.get("name") or "").strip()
+            if not n:
+                conn.close()
+                return self._send_json({"error": "name cannot be empty"}, 400)
+            fields["name"] = n
+        if "position" in data:
+            try:
+                fields["position"] = int(data.get("position"))
+            except (TypeError, ValueError):
+                pass
+        if not fields:
+            conn.close()
+            return self._send_json({"error": "更新項目がありません"}, 400)
+        fields["updated_at"] = now_iso()
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        conn.execute(
+            f"UPDATE task_types SET {sets} WHERE id = ?", list(fields.values()) + [type_id]
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM task_types WHERE id = ?", (type_id,)).fetchone()
+        conn.close()
+        self._send_json(dict(row))
+
+    def delete_task_type(self, user, type_id):
+        conn = get_db()
+        existing = conn.execute("SELECT * FROM task_types WHERE id = ?", (type_id,)).fetchone()
+        if existing is None:
+            conn.close()
+            return self._send_json({"error": "not found"}, 404)
+        pid = existing["project_id"]
+        if not self._require_member(conn, pid, user):
+            conn.close()
+            return self._send_json({"error": "アクセス権がありません"}, 403)
+        # 種別を削除しても配下タスクは消さず、種別なし(NULL)に戻す
+        conn.execute(
+            "UPDATE tasks SET type_id = NULL WHERE type_id = ? AND project_id = ?",
+            (type_id, pid),
+        )
+        conn.execute("DELETE FROM task_types WHERE id = ?", (type_id,))
         conn.commit()
         conn.close()
         self._send_json({"ok": True})

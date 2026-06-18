@@ -147,6 +147,7 @@
   .badge-due.overdue { background: #ffebe6; color: var(--p-high); }
   .badge-due.soon { background: #fff7e6; color: #b87503; }
   .badge-iter { background: #ede7fb; color: #6741d9; }
+  .badge-type { background: #d9f0ff; color: #0b6bcb; border: 1px solid #b7e0ff; }
   .badge-col { background: #ebecf0; color: var(--muted); }
   .badge-col.done { background: #e3fcef; color: var(--done); }
 
@@ -289,6 +290,9 @@
   <select id="filterCategory"><option value="">カテゴリ: すべて</option></select>
   <select id="filterTag"><option value="">タグ: すべて</option></select>
   <select id="filterIteration"><option value="">イテレーション: すべて</option></select>
+  <select id="filterType"><option value="">種別: すべて</option></select>
+  <span class="spacer"></span>
+  <button class="btn btn-ghost btn-sm" id="manageTypesBtn">🏷 種別を管理</button>
 </div>
 
 <!-- ボードビュー(列はJSで動的生成) -->
@@ -334,9 +338,15 @@
           </select>
         </div>
       </div>
-      <div class="field">
-        <label for="f-iteration">イテレーション</label>
-        <select id="f-iteration"><option value="">バックログ(未割り当て)</option></select>
+      <div class="field-row">
+        <div class="field">
+          <label for="f-iteration">イテレーション</label>
+          <select id="f-iteration"><option value="">バックログ(未割り当て)</option></select>
+        </div>
+        <div class="field">
+          <label for="f-type">種別</label>
+          <select id="f-type"><option value="">種別なし</option></select>
+        </div>
       </div>
       <div class="field-row">
         <div class="field">
@@ -419,6 +429,29 @@
         <button type="submit" class="btn btn-primary">保存</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- 種別(タスクタイプ)管理モーダル -->
+<div class="overlay" id="typeOverlay">
+  <div class="modal">
+    <h2>種別の管理</h2>
+    <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">
+      このプロジェクトのタスクに付けられる種別を追加・改名・削除できます。
+      種別を削除しても、その種別が付いていたタスクは消えず「種別なし」に戻ります。
+    </div>
+    <div id="type-list"></div>
+    <form id="addTypeForm" class="inline-form">
+      <div class="field">
+        <label for="t-name">種別を追加</label>
+        <input type="text" id="t-name" maxlength="40" autocomplete="off" placeholder="例: 設計, ドキュメント">
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm">追加</button>
+    </form>
+    <div class="form-error" id="type-error"></div>
+    <div class="modal-actions" style="margin-top:12px;">
+      <button type="button" class="btn btn-ghost" id="typeCloseBtn">閉じる</button>
+    </div>
   </div>
 </div>
 
@@ -521,12 +554,14 @@
 const TASK_API = "/api/tasks";
 const COL_API = "/api/columns";
 const ITER_API = "/api/iterations";
+const TYPE_API = "/api/task_types";
 const PRIO_LABEL = { high: "高", mid: "中", low: "低" };
 const ITER_STATUS_LABEL = { planned: "計画中", active: "進行中", done: "完了" };
 
 let tasks = [];
 let columns = [];
 let iterations = [];
+let taskTypes = [];
 let currentView = "board";
 let dropDone = false;
 
@@ -555,19 +590,21 @@ function activeProject() { return projects.find(p => p.id === activeProjectId) |
 function isOwner() { const p = activeProject(); return !!(p && p.my_role === "owner"); }
 
 async function load() {
-  if (!activeProjectId) { tasks = []; columns = []; iterations = []; render(); return; }
+  if (!activeProjectId) { tasks = []; columns = []; iterations = []; taskTypes = []; render(); return; }
   const q = `?project_id=${activeProjectId}`;
   try {
-    [tasks, columns, iterations] = await Promise.all([
+    [tasks, columns, iterations, taskTypes] = await Promise.all([
       api(TASK_API, "GET", q),
       api(COL_API, "GET", q),
       api(ITER_API, "GET", q),
+      api(TYPE_API, "GET", q),
     ]);
     render();
   } catch (e) {
     alert("読み込みに失敗しました: " + e.message);
   }
 }
+function typeName(id) { const t = taskTypes.find(x => x.id === id); return t ? t.name : null; }
 
 // ---- ユーティリティ ----
 function escapeHtml(s) {
@@ -604,6 +641,7 @@ function getFilters() {
     category: document.getElementById("filterCategory").value,
     tag: document.getElementById("filterTag").value,
     iteration: document.getElementById("filterIteration").value,
+    type: document.getElementById("filterType").value,
   };
 }
 function matchFilter(t, f) {
@@ -614,6 +652,8 @@ function matchFilter(t, f) {
   if (f.tag && !(t.tags || []).includes(f.tag)) return false;
   if (f.iteration === "none" && t.iteration_id != null) return false;
   if (f.iteration && f.iteration !== "none" && String(t.iteration_id) !== f.iteration) return false;
+  if (f.type === "none" && t.type_id != null) return false;
+  if (f.type && f.type !== "none" && String(t.type_id) !== f.type) return false;
   return true;
 }
 
@@ -622,6 +662,7 @@ function render() {
   refreshFilterOptions();
   refreshIterationSelects();
   refreshColumnSelect();
+  refreshTypeSelect();
   if (currentView === "board") renderBoard();
   else renderBacklog();
   renderStats();
@@ -749,6 +790,10 @@ function cardEl(t, ctx) {
   el.dataset.id = t.id;
 
   let meta = `<span class="badge badge-prio p-${t.priority}">${PRIO_LABEL[t.priority]}</span>`;
+  if (t.type_id != null) {
+    const tn = typeName(t.type_id);
+    if (tn) meta += `<span class="badge badge-type">${escapeHtml(tn)}</span>`;
+  }
   if (ctx === "backlog") {
     const c = columnById(t.column_id);
     if (c) meta += `<span class="badge badge-col ${c.is_done ? "done" : ""}">${escapeHtml(c.name)}</span>`;
@@ -799,6 +844,8 @@ function refreshFilterOptions() {
   syncSelect("filterTag", tags.map(v => [v, v]), "タグ: すべて");
   const iterOpts = [["none", "バックログ(未割り当て)"]].concat(iterations.map(i => [String(i.id), i.name]));
   syncSelect("filterIteration", iterOpts, "イテレーション: すべて");
+  const typeOpts = [["none", "種別なし"]].concat(taskTypes.map(t => [String(t.id), t.name]));
+  syncSelect("filterType", typeOpts, "種別: すべて");
 }
 function refreshIterationSelects() {
   const sel = document.getElementById("f-iteration");
@@ -806,6 +853,13 @@ function refreshIterationSelects() {
   sel.innerHTML = `<option value="">バックログ(未割り当て)</option>` +
     iterations.map(i => `<option value="${i.id}">${escapeHtml(i.name)}</option>`).join("");
   sel.value = cur;
+}
+function refreshTypeSelect() {
+  const sel = document.getElementById("f-type");
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">種別なし</option>` +
+    taskTypes.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join("");
+  if (taskTypes.some(t => String(t.id) === cur)) sel.value = cur;
 }
 function refreshColumnSelect() {
   const sel = document.getElementById("f-column");
@@ -860,6 +914,9 @@ function openModal(t, presetCol) {
   refreshIterationSelects();
   document.getElementById("f-iteration").value =
     t ? (t.iteration_id != null ? String(t.iteration_id) : "") : "";
+  refreshTypeSelect();
+  document.getElementById("f-type").value =
+    t ? (t.type_id != null ? String(t.type_id) : "") : "";
   document.getElementById("f-due").value = t ? (t.due_date || "") : "";
   document.getElementById("f-category").value = t ? t.category : "";
   document.getElementById("f-tags").value = t ? (t.tags || []).join(", ") : "";
@@ -871,12 +928,14 @@ form.addEventListener("submit", async e => {
   e.preventDefault();
   const id = document.getElementById("taskId").value;
   const iterVal = document.getElementById("f-iteration").value;
+  const typeVal = document.getElementById("f-type").value;
   const payload = {
     title: document.getElementById("f-title").value.trim(),
     description: document.getElementById("f-desc").value.trim(),
     column_id: Number(document.getElementById("f-column").value),
     priority: document.getElementById("f-priority").value,
     iteration_id: iterVal === "" ? null : Number(iterVal),
+    type_id: typeVal === "" ? null : Number(typeVal),
     due_date: document.getElementById("f-due").value || null,
     category: document.getElementById("f-category").value.trim(),
     tags: document.getElementById("f-tags").value.split(",").map(s => s.trim()).filter(Boolean),
@@ -1024,7 +1083,7 @@ iterOverlay.onclick = e => { if (e.target === iterOverlay) closeIterModal(); };
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") { closeModal(); closeColModal(); closeIterModal(); }
 });
-["search", "filterPriority", "filterCategory", "filterTag", "filterIteration"].forEach(id =>
+["search", "filterPriority", "filterCategory", "filterTag", "filterIteration", "filterType"].forEach(id =>
   document.getElementById(id).addEventListener("input", () => { if (currentView === "board") renderBoard(); }));
 
 // ---- ドラッグ&ドロップ(並び替え + グループ移動) ----
@@ -1346,9 +1405,71 @@ document.getElementById("createUserForm").addEventListener("submit", async e => 
   } catch (err) { errEl.textContent = err.message; }
 });
 
+// ---- 種別(タスクタイプ)管理 ----
+const typeOverlay = document.getElementById("typeOverlay");
+function openTypeManage() {
+  if (!activeProjectId) return;
+  document.getElementById("type-error").textContent = "";
+  document.getElementById("t-name").value = "";
+  typeOverlay.classList.add("open");
+  renderTypeList();
+  document.getElementById("t-name").focus();
+}
+function closeTypeManage() { typeOverlay.classList.remove("open"); }
+document.getElementById("manageTypesBtn").onclick = openTypeManage;
+document.getElementById("typeCloseBtn").onclick = closeTypeManage;
+typeOverlay.onclick = e => { if (e.target === typeOverlay) closeTypeManage(); };
+function renderTypeList() {
+  const wrap = document.getElementById("type-list");
+  wrap.innerHTML = "";
+  if (taskTypes.length === 0) {
+    wrap.innerHTML = `<div class="empty">種別がありません。下のフォームから追加してください。</div>`;
+    return;
+  }
+  taskTypes.forEach(ty => {
+    const n = tasks.filter(t => t.type_id === ty.id).length;
+    const row = document.createElement("div");
+    row.className = "list-row";
+    row.innerHTML = `
+      <span class="badge badge-type">${escapeHtml(ty.name)}</span>
+      <span class="grow" style="font-size:12px; color:var(--muted);">${n}件のタスク</span>
+      <button class="btn btn-ghost btn-sm" data-act="rename">✎ 改名</button>
+      <button class="btn btn-ghost btn-sm" data-act="del">🗑 削除</button>`;
+    row.querySelector('[data-act="rename"]').onclick = async () => {
+      const name = prompt("種別の新しい名前", ty.name);
+      if (name == null) return;
+      if (!name.trim()) return;
+      try { await api(TYPE_API, "PUT", "/" + ty.id, { name: name.trim() }); await load(); renderTypeList(); }
+      catch (err) { document.getElementById("type-error").textContent = err.message; }
+    };
+    row.querySelector('[data-act="del"]').onclick = async () => {
+      const msg = n > 0
+        ? `種別「${ty.name}」を削除しますか?\n${n}件のタスクは「種別なし」に戻ります(削除されません)。`
+        : `種別「${ty.name}」を削除しますか?`;
+      if (!confirm(msg)) return;
+      try { await api(TYPE_API, "DELETE", "/" + ty.id); await load(); renderTypeList(); }
+      catch (err) { document.getElementById("type-error").textContent = err.message; }
+    };
+    wrap.appendChild(row);
+  });
+}
+document.getElementById("addTypeForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const errEl = document.getElementById("type-error");
+  errEl.textContent = "";
+  const name = document.getElementById("t-name").value.trim();
+  if (!name) return;
+  try {
+    await api(TYPE_API, "POST", "", { name, project_id: activeProjectId });
+    document.getElementById("t-name").value = "";
+    await load();
+    renderTypeList();
+  } catch (err) { errEl.textContent = err.message; }
+});
+
 // Escでモーダルを閉じる(追加分)
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") { closeProjModal(); closeManage(); closeAdmin(); }
+  if (e.key === "Escape") { closeProjModal(); closeManage(); closeAdmin(); closeTypeManage(); }
 });
 
 boot();
