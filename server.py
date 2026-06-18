@@ -6,7 +6,8 @@ Python標準ライブラリのみで動作する軽量HTTPサーバー。
   実行:  python3 server.py
 
 構成:
-  core.py   … 設定・DB・各種ヘルパー(HTTP非依存)
+  const.py  … 定数・設定値(他モジュールに依存しないリーフ)
+  core.py   … DB・各種ヘルパー(HTTP非依存)
   routes.py … 認証・全APIエンドポイント・ルーティング(ApiRoutes ミックスイン)
   server.py … HTTPサーバ起動・低レベルなリクエスト/レスポンス処理・静的配信(このファイル)
 
@@ -19,7 +20,8 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from core import BASE_DIR, DB_PATH, HOST, PORT, init_db
+from const import BASE_DIR, DB_PATH, HOST, PORT
+from core import init_db
 from routes import ApiRoutes
 
 

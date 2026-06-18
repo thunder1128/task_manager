@@ -72,11 +72,12 @@ python3 server.py
 |---------|------|
 | `server.py` | エントリポイント。HTTPサーバ起動・低レベルなリクエスト/レスポンス処理・静的配信・`main()` |
 | `routes.py` | 認証・全APIエンドポイント・ルーティング(`ApiRoutes` ミックスイン) |
-| `core.py` | 設定・DB・各種ヘルパー(パスワード/Slack/直列化/サニタイズ。HTTP非依存) |
+| `core.py` | DB・各種ヘルパー(パスワード/Slack/直列化/サニタイズ。HTTP非依存) |
+| `const.py` | 定数・設定値の集約(他モジュールに依存しないリーフ) |
 | `index.html` | フロントエンド(単一HTML。UI全部入り) |
 | `tasks.db` | データベース(初回起動時に自動生成) |
 
-`Handler`(server.py)は `ApiRoutes`(routes.py)を継承し、APIルートは routes.py、HTTPの土台は server.py、共有ロジックは core.py に分離している。`python3 server.py` で起動する点は変わらない。
+`Handler`(server.py)は `ApiRoutes`(routes.py)を継承し、APIルートは routes.py、HTTPの土台は server.py、共有ロジックは core.py、定数は const.py に分離している。依存方向は `const ← core ← routes ← server` の一方向。`python3 server.py` で起動する点は変わらない。
 
 ## API
 
