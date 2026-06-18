@@ -56,6 +56,9 @@ import os
 import re
 import secrets
 import sqlite3
+import ssl
+import threading
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -195,6 +198,11 @@ def init_db():
         """
     )
 
+    # 既存DBへのマイグレーション: projects に Slack Webhook URL 列を追加
+    pcols = [r[1] for r in conn.execute("PRAGMA table_info(projects)").fetchall()]
+    if "slack_webhook_url" not in pcols:
+        conn.execute("ALTER TABLE projects ADD COLUMN slack_webhook_url TEXT NOT NULL DEFAULT ''")
+
     # 管理者アカウントのブートストラップ(ユーザーが1人もいない初回のみ)
     if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
         ts = now_iso()
@@ -214,6 +222,59 @@ def init_db():
 
 def prune_sessions(conn):
     conn.execute("DELETE FROM sessions WHERE expires_at < ?", (now_iso(),))
+
+
+# ---- Slack 連携(Incoming Webhook) ----
+def is_valid_slack_webhook(url):
+    """Slack の Incoming Webhook URL かを検証(SSRF防止のためホストを固定)。"""
+    if not url:
+        return False
+    try:
+        u = urlparse(url)
+    except ValueError:
+        return False
+    return u.scheme == "https" and u.hostname == "hooks.slack.com"
+
+
+def _ssl_context():
+    """HTTPS用のSSLコンテキスト。標準のCAが空の環境(macOSのpython.org版等)では
+    certifi → /etc/ssl/cert.pem の順でフォールバックする(検証は常に有効)。"""
+    ctx = ssl.create_default_context()
+    if ctx.get_ca_certs():
+        return ctx
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        pass
+    if os.path.isfile("/etc/ssl/cert.pem"):
+        try:
+            return ssl.create_default_context(cafile="/etc/ssl/cert.pem")
+        except Exception:
+            pass
+    return ctx
+
+
+def post_to_slack(url, text):
+    """Slack へメッセージを送信する(失敗してもアプリ本体に影響させない)。"""
+    if not is_valid_slack_webhook(url):
+        return
+    payload = json.dumps({"text": text}).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=payload, headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5, context=_ssl_context()) as resp:
+            resp.read()
+    except Exception as e:  # ネットワーク不通・無効URL等は握りつぶしてログだけ
+        print(f"  [slack] 送信失敗: {e}")
+
+
+def notify_slack_async(url, text):
+    """タスク作成のレスポンスを遅延させないよう別スレッドで送信する。"""
+    if not is_valid_slack_webhook(url):
+        return
+    threading.Thread(target=post_to_slack, args=(url, text), daemon=True).start()
 
 
 # ---- 直列化 ----
@@ -620,16 +681,23 @@ class Handler(BaseHTTPRequestHandler):
         member_count = conn.execute(
             "SELECT COUNT(*) FROM project_members WHERE project_id = ?", (row["id"],)
         ).fetchone()[0]
-        return {
+        role = m["role"] if m else None
+        webhook = row["slack_webhook_url"] if "slack_webhook_url" in row.keys() else ""
+        result = {
             "id": row["id"],
             "name": row["name"],
             "owner_id": row["owner_id"],
             "owner_name": owner["username"] if owner else None,
-            "my_role": m["role"] if m else None,
+            "my_role": role,
             "member_count": member_count,
+            "slack_configured": bool(webhook),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
+        # Webhook URL は秘密情報なのでオーナーにのみ返す
+        if role == "owner":
+            result["slack_webhook_url"] = webhook or ""
+        return result
 
     def list_projects(self, user):
         conn = get_db()
@@ -687,12 +755,30 @@ class Handler(BaseHTTPRequestHandler):
         if not self._require_owner(conn, pid, user):
             conn.close()
             return self._send_json({"error": "オーナーのみ変更できます"}, 403)
-        name = (data.get("name") or "").strip()
-        if not name:
+
+        fields = {}
+        if "name" in data:
+            name = (data.get("name") or "").strip()
+            if not name:
+                conn.close()
+                return self._send_json({"error": "プロジェクト名は必須です"}, 400)
+            fields["name"] = name
+        if "slack_webhook_url" in data:
+            webhook = (data.get("slack_webhook_url") or "").strip()
+            if webhook and not is_valid_slack_webhook(webhook):
+                conn.close()
+                return self._send_json(
+                    {"error": "Slack Webhook URL は https://hooks.slack.com/ で始まる必要があります"}, 400
+                )
+            fields["slack_webhook_url"] = webhook
+        if not fields:
             conn.close()
-            return self._send_json({"error": "プロジェクト名は必須です"}, 400)
+            return self._send_json({"error": "更新項目がありません"}, 400)
+
+        fields["updated_at"] = now_iso()
+        sets = ", ".join(f"{k} = ?" for k in fields)
         conn.execute(
-            "UPDATE projects SET name = ?, updated_at = ? WHERE id = ?", (name, now_iso(), pid)
+            f"UPDATE projects SET {sets} WHERE id = ?", list(fields.values()) + [pid]
         )
         conn.commit()
         row = conn.execute("SELECT * FROM projects WHERE id = ?", (pid,)).fetchone()
@@ -876,7 +962,25 @@ class Handler(BaseHTTPRequestHandler):
         )
         conn.commit()
         row = conn.execute("SELECT * FROM tasks WHERE id = ?", (cur.lastrowid,)).fetchone()
+
+        # Slack 通知(プロジェクトに Webhook が設定されていれば送信)
+        project = conn.execute("SELECT name, slack_webhook_url FROM projects WHERE id = ?", (pid,)).fetchone()
+        col = conn.execute("SELECT name FROM columns WHERE id = ?", (column_id,)).fetchone()
         conn.close()
+
+        if project and project["slack_webhook_url"]:
+            prio_label = {"high": "高", "mid": "中", "low": "低"}.get(row["priority"], row["priority"])
+            lines = [
+                "🆕 新しいタスクが追加されました",
+                f"*{row['title']}*",
+                f"プロジェクト: {project['name']} / 優先度: {prio_label}"
+                + (f" / 列: {col['name']}" if col else ""),
+                f"登録者: {user['username']}",
+            ]
+            if row["due_date"]:
+                lines.append(f"期限: {row['due_date']}")
+            notify_slack_async(project["slack_webhook_url"], "\n".join(lines))
+
         self._send_json(task_to_dict(row), 201)
 
     def update_task(self, user, task_id):

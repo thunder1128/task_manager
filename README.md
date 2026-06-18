@@ -26,6 +26,21 @@ python3 server.py
 - **データの分離**: かんばん列・イテレーション・タスクは**プロジェクトに属し、そのプロジェクトのメンバーだけが閲覧・編集できる**。他人のプロジェクトのデータは一切見えない。
 - プロジェクトを新規作成すると、既定のかんばん列(未着手 / 進行中 / 完了)が自動生成される。
 
+## Slack通知(タスク追加時の自動投稿)
+
+プロジェクトに **Slack の Incoming Webhook URL** を設定すると、そのプロジェクトに**タスクを追加したとき**、Webhookに紐づくチャンネルへ自動でメッセージが投稿される。
+
+設定手順:
+1. Slackで Incoming Webhook を作成し、投稿先チャンネルを選んで Webhook URL(`https://hooks.slack.com/services/...`)を取得する。
+   (Slack App → Incoming Webhooks を有効化 → Add New Webhook to Workspace)
+2. アプリでそのプロジェクトを開き、ヘッダーの「⚙ プロジェクト」→ **Slack通知** 欄にURLを貼り付けて「保存」。**設定できるのはオーナーのみ**。
+3. 以降、そのプロジェクトでタスクを追加すると、タイトル・優先度・列・登録者・期限を含むメッセージが投稿される。空欄で保存すると無効化。
+
+補足:
+- Webhook URLは秘密情報のため、APIではオーナーにのみ返す(他メンバーには「設定済みか否か」のみ)。`https://hooks.slack.com/` 以外のURLは受け付けない(SSRF対策)。
+- 送信はタスク作成のレスポンスを待たせないよう別スレッドで非同期に行い、失敗してもタスク追加自体は成功する(サーバーログに `[slack] 送信失敗` を出力)。
+- macOSのpython.org版PythonなどCA証明書が無い環境では、`certifi` または `/etc/ssl/cert.pem` を自動利用してHTTPS検証を行う。どちらも無くSSLエラーが出る場合は、`pip install certifi` か Python付属の「Install Certificates.command」を実行する。
+
 ## 機能
 
 ログイン後、ヘッダーのタブで **かんばん** / **バックログ** を切り替えられる(操作対象は選択中のプロジェクト)。
@@ -83,7 +98,7 @@ python3 server.py
 |---------|------|------|
 | GET | `/api/projects` | 自分が参加するプロジェクト一覧 |
 | POST | `/api/projects` | プロジェクト作成(`name`)。作成者がオーナー、既定列も生成 |
-| PUT | `/api/projects/<id>` | プロジェクト名変更(オーナーのみ) |
+| PUT | `/api/projects/<id>` | プロジェクト更新(オーナーのみ。`name` / `slack_webhook_url`) |
 | DELETE | `/api/projects/<id>` | プロジェクト削除(オーナーのみ。配下データも削除) |
 | GET | `/api/projects/<id>/members` | メンバー一覧(メンバーのみ) |
 | POST | `/api/projects/<id>/members` | メンバー追加(オーナーのみ。`username`, 任意 `role`) |
