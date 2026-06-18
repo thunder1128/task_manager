@@ -70,9 +70,13 @@ python3 server.py
 
 | ファイル | 役割 |
 |---------|------|
-| `server.py` | バックエンド(HTTPサーバー + REST API + SQLite) |
+| `server.py` | エントリポイント。HTTPサーバ起動・低レベルなリクエスト/レスポンス処理・静的配信・`main()` |
+| `routes.py` | 認証・全APIエンドポイント・ルーティング(`ApiRoutes` ミックスイン) |
+| `core.py` | 設定・DB・各種ヘルパー(パスワード/Slack/直列化/サニタイズ。HTTP非依存) |
 | `index.html` | フロントエンド(単一HTML。UI全部入り) |
 | `tasks.db` | データベース(初回起動時に自動生成) |
+
+`Handler`(server.py)は `ApiRoutes`(routes.py)を継承し、APIルートは routes.py、HTTPの土台は server.py、共有ロジックは core.py に分離している。`python3 server.py` で起動する点は変わらない。
 
 ## API
 
