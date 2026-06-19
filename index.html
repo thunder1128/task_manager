@@ -209,6 +209,10 @@
     border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
     font-size: 14px; font-weight: 600; background: var(--card); color: var(--text); max-width: 220px;
   }
+  .font-select {
+    border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px;
+    font-size: 12px; background: var(--card); color: var(--muted); cursor: pointer;
+  }
   .user-badge { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
   .user-badge .uname { font-weight: 700; color: var(--text); }
   .user-badge .tag-admin {
@@ -246,6 +250,11 @@
   </div>
   <button class="btn btn-primary" id="addBtn">+ 新規タスク</button>
   <span class="user-badge" id="userBadge">
+    <select id="fontSize" title="文字サイズ" class="font-select">
+      <option value="0.85">文字: 小</option>
+      <option value="1" selected>文字: 中</option>
+      <option value="1.15">文字: 大</option>
+    </select>
     <span class="uname" id="userName"></span>
     <button class="btn btn-ghost btn-sm" id="adminBtn" style="display:none;">👤 ユーザー管理</button>
     <button class="btn btn-ghost btn-sm" id="logoutBtn">ログアウト</button>
@@ -570,6 +579,22 @@ let currentUser = null;
 let projects = [];
 let activeProjectId = null;
 const LS_PROJECT = "tm_active_project";
+const LS_FONT = "tm_font_scale";
+
+// ---- 文字サイズ(ブラウザごとに保存。zoomで画面全体を拡縮) ----
+function applyFontSize(scale) {
+  document.body.style.zoom = scale;
+}
+function initFontSize() {
+  const saved = localStorage.getItem(LS_FONT) || "1";
+  const sel = document.getElementById("fontSize");
+  sel.value = [...sel.options].some(o => o.value === saved) ? saved : "1";
+  applyFontSize(sel.value);
+  sel.addEventListener("change", () => {
+    localStorage.setItem(LS_FONT, sel.value);
+    applyFontSize(sel.value);
+  });
+}
 
 // ---- API ----
 async function api(base, method, path = "", body) {
@@ -1472,6 +1497,7 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape") { closeProjModal(); closeManage(); closeAdmin(); closeTypeManage(); }
 });
 
+initFontSize();
 boot();
 </script>
 </body>
