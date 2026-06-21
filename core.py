@@ -35,6 +35,7 @@ __all__ = [
     "task_to_dict", "column_to_dict", "user_to_dict",
     "sanitize_priority", "sanitize_iter_status", "sanitize_iteration_id",
     "project_column_ids", "sanitize_column_id", "sanitize_type_id",
+    "sanitize_assignee_id",
 ]
 
 
@@ -118,6 +119,7 @@ def init_db():
             column_id   INTEGER,
             iteration_id INTEGER,
             type_id     INTEGER,
+            assignee_id INTEGER,
             position    INTEGER NOT NULL DEFAULT 0,
             created_at  TEXT    NOT NULL,
             updated_at  TEXT    NOT NULL
@@ -159,10 +161,12 @@ def init_db():
     if "slack_webhook_url" not in pcols:
         conn.execute("ALTER TABLE projects ADD COLUMN slack_webhook_url TEXT NOT NULL DEFAULT ''")
 
-    # 既存DBへのマイグレーション: tasks に種別(type_id)列を追加
+    # 既存DBへのマイグレーション: tasks に種別(type_id)/担当者(assignee_id)列を追加
     tcols = [r[1] for r in conn.execute("PRAGMA table_info(tasks)").fetchall()]
     if "type_id" not in tcols:
         conn.execute("ALTER TABLE tasks ADD COLUMN type_id INTEGER")
+    if "assignee_id" not in tcols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN assignee_id INTEGER")
 
     # 管理者アカウントのブートストラップ(ユーザーが1人もいない初回のみ)
     if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
@@ -317,5 +321,20 @@ def sanitize_type_id(value, conn, project_id):
         return None
     row = conn.execute(
         "SELECT id FROM task_types WHERE id = ? AND project_id = ?", (v, project_id)
+    ).fetchone()
+    return v if row else None
+
+
+def sanitize_assignee_id(value, conn, project_id):
+    """担当者IDを正規化。未指定/不正/そのプロジェクトの非メンバーは None。"""
+    if value in (None, "", "null"):
+        return None
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return None
+    row = conn.execute(
+        "SELECT 1 FROM project_members WHERE user_id = ? AND project_id = ?",
+        (v, project_id),
     ).fetchone()
     return v if row else None

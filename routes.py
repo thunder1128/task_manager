@@ -531,6 +531,11 @@ class ApiRoutes:
             "DELETE FROM project_members WHERE project_id = ? AND user_id = ?",
             (pid, target_user_id),
         )
+        # 外したメンバーが担当だったタスクは「未割り当て」に戻す
+        conn.execute(
+            "UPDATE tasks SET assignee_id = NULL WHERE project_id = ? AND assignee_id = ?",
+            (pid, target_user_id),
+        )
         conn.commit()
         removed = cur.rowcount
         conn.close()
@@ -598,8 +603,8 @@ class ApiRoutes:
         cur = conn.execute(
             """INSERT INTO tasks
                (project_id, title, description, priority, due_date, category, tags,
-                column_id, iteration_id, type_id, position, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                column_id, iteration_id, type_id, assignee_id, position, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 pid,
                 title,
@@ -611,6 +616,7 @@ class ApiRoutes:
                 column_id,
                 sanitize_iteration_id(data.get("iteration_id"), conn, pid),
                 sanitize_type_id(data.get("type_id"), conn, pid),
+                sanitize_assignee_id(data.get("assignee_id"), conn, pid),
                 maxpos + 1,
                 ts,
                 ts,
@@ -681,6 +687,8 @@ class ApiRoutes:
             fields["iteration_id"] = sanitize_iteration_id(data.get("iteration_id"), conn, pid)
         if "type_id" in data:
             fields["type_id"] = sanitize_type_id(data.get("type_id"), conn, pid)
+        if "assignee_id" in data:
+            fields["assignee_id"] = sanitize_assignee_id(data.get("assignee_id"), conn, pid)
         if "position" in data:
             try:
                 fields["position"] = int(data.get("position"))

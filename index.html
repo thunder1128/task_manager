@@ -148,6 +148,7 @@
   .badge-due.soon { background: #fff7e6; color: #b87503; }
   .badge-iter { background: #ede7fb; color: #6741d9; }
   .badge-type { background: #d9f0ff; color: #0b6bcb; border: 1px solid #b7e0ff; }
+  .badge-assignee { background: #e7f6ec; color: #1a7f43; border: 1px solid #c3e9d1; }
   .badge-col { background: #ebecf0; color: var(--muted); }
   .badge-col.done { background: #e3fcef; color: var(--done); }
 
@@ -300,6 +301,7 @@
   <select id="filterTag"><option value="">タグ: すべて</option></select>
   <select id="filterIteration"><option value="">イテレーション: すべて</option></select>
   <select id="filterType"><option value="">種別: すべて</option></select>
+  <select id="filterAssignee"><option value="">担当者: すべて</option></select>
   <span class="spacer"></span>
   <button class="btn btn-ghost btn-sm" id="manageTypesBtn">🏷 種別を管理</button>
 </div>
@@ -356,6 +358,10 @@
           <label for="f-type">種別</label>
           <select id="f-type"><option value="">種別なし</option></select>
         </div>
+      </div>
+      <div class="field">
+        <label for="f-assignee">担当者</label>
+        <select id="f-assignee"><option value="">未割り当て</option></select>
       </div>
       <div class="field-row">
         <div class="field">
@@ -571,6 +577,7 @@ let tasks = [];
 let columns = [];
 let iterations = [];
 let taskTypes = [];
+let members = [];
 let currentView = "board";
 let dropDone = false;
 
@@ -615,14 +622,15 @@ function activeProject() { return projects.find(p => p.id === activeProjectId) |
 function isOwner() { const p = activeProject(); return !!(p && p.my_role === "owner"); }
 
 async function load() {
-  if (!activeProjectId) { tasks = []; columns = []; iterations = []; taskTypes = []; render(); return; }
+  if (!activeProjectId) { tasks = []; columns = []; iterations = []; taskTypes = []; members = []; render(); return; }
   const q = `?project_id=${activeProjectId}`;
   try {
-    [tasks, columns, iterations, taskTypes] = await Promise.all([
+    [tasks, columns, iterations, taskTypes, members] = await Promise.all([
       api(TASK_API, "GET", q),
       api(COL_API, "GET", q),
       api(ITER_API, "GET", q),
       api(TYPE_API, "GET", q),
+      api(`/api/projects/${activeProjectId}/members`, "GET"),
     ]);
     render();
   } catch (e) {
@@ -630,6 +638,7 @@ async function load() {
   }
 }
 function typeName(id) { const t = taskTypes.find(x => x.id === id); return t ? t.name : null; }
+function memberName(id) { const m = members.find(x => x.user_id === id); return m ? m.username : null; }
 
 // ---- ユーティリティ ----
 function escapeHtml(s) {
@@ -667,6 +676,7 @@ function getFilters() {
     tag: document.getElementById("filterTag").value,
     iteration: document.getElementById("filterIteration").value,
     type: document.getElementById("filterType").value,
+    assignee: document.getElementById("filterAssignee").value,
   };
 }
 function matchFilter(t, f) {
@@ -679,6 +689,8 @@ function matchFilter(t, f) {
   if (f.iteration && f.iteration !== "none" && String(t.iteration_id) !== f.iteration) return false;
   if (f.type === "none" && t.type_id != null) return false;
   if (f.type && f.type !== "none" && String(t.type_id) !== f.type) return false;
+  if (f.assignee === "none" && t.assignee_id != null) return false;
+  if (f.assignee && f.assignee !== "none" && String(t.assignee_id) !== f.assignee) return false;
   return true;
 }
 
@@ -688,6 +700,7 @@ function render() {
   refreshIterationSelects();
   refreshColumnSelect();
   refreshTypeSelect();
+  refreshAssigneeSelect();
   if (currentView === "board") renderBoard();
   else renderBacklog();
   renderStats();
@@ -819,6 +832,10 @@ function cardEl(t, ctx) {
     const tn = typeName(t.type_id);
     if (tn) meta += `<span class="badge badge-type">${escapeHtml(tn)}</span>`;
   }
+  if (t.assignee_id != null) {
+    const an = memberName(t.assignee_id);
+    if (an) meta += `<span class="badge badge-assignee">👤 ${escapeHtml(an)}</span>`;
+  }
   if (ctx === "backlog") {
     const c = columnById(t.column_id);
     if (c) meta += `<span class="badge badge-col ${c.is_done ? "done" : ""}">${escapeHtml(c.name)}</span>`;
@@ -871,6 +888,8 @@ function refreshFilterOptions() {
   syncSelect("filterIteration", iterOpts, "イテレーション: すべて");
   const typeOpts = [["none", "種別なし"]].concat(taskTypes.map(t => [String(t.id), t.name]));
   syncSelect("filterType", typeOpts, "種別: すべて");
+  const asgOpts = [["none", "未割り当て"]].concat(members.map(m => [String(m.user_id), m.username]));
+  syncSelect("filterAssignee", asgOpts, "担当者: すべて");
 }
 function refreshIterationSelects() {
   const sel = document.getElementById("f-iteration");
@@ -885,6 +904,13 @@ function refreshTypeSelect() {
   sel.innerHTML = `<option value="">種別なし</option>` +
     taskTypes.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join("");
   if (taskTypes.some(t => String(t.id) === cur)) sel.value = cur;
+}
+function refreshAssigneeSelect() {
+  const sel = document.getElementById("f-assignee");
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">未割り当て</option>` +
+    members.map(m => `<option value="${m.user_id}">${escapeHtml(m.username)}</option>`).join("");
+  if (members.some(m => String(m.user_id) === cur)) sel.value = cur;
 }
 function refreshColumnSelect() {
   const sel = document.getElementById("f-column");
@@ -942,6 +968,9 @@ function openModal(t, presetCol) {
   refreshTypeSelect();
   document.getElementById("f-type").value =
     t ? (t.type_id != null ? String(t.type_id) : "") : "";
+  refreshAssigneeSelect();
+  document.getElementById("f-assignee").value =
+    t ? (t.assignee_id != null ? String(t.assignee_id) : "") : "";
   document.getElementById("f-due").value = t ? (t.due_date || "") : "";
   document.getElementById("f-category").value = t ? t.category : "";
   document.getElementById("f-tags").value = t ? (t.tags || []).join(", ") : "";
@@ -954,6 +983,7 @@ form.addEventListener("submit", async e => {
   const id = document.getElementById("taskId").value;
   const iterVal = document.getElementById("f-iteration").value;
   const typeVal = document.getElementById("f-type").value;
+  const assigneeVal = document.getElementById("f-assignee").value;
   const payload = {
     title: document.getElementById("f-title").value.trim(),
     description: document.getElementById("f-desc").value.trim(),
@@ -961,6 +991,7 @@ form.addEventListener("submit", async e => {
     priority: document.getElementById("f-priority").value,
     iteration_id: iterVal === "" ? null : Number(iterVal),
     type_id: typeVal === "" ? null : Number(typeVal),
+    assignee_id: assigneeVal === "" ? null : Number(assigneeVal),
     due_date: document.getElementById("f-due").value || null,
     category: document.getElementById("f-category").value.trim(),
     tags: document.getElementById("f-tags").value.split(",").map(s => s.trim()).filter(Boolean),
@@ -1108,7 +1139,7 @@ iterOverlay.onclick = e => { if (e.target === iterOverlay) closeIterModal(); };
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") { closeModal(); closeColModal(); closeIterModal(); }
 });
-["search", "filterPriority", "filterCategory", "filterTag", "filterIteration", "filterType"].forEach(id =>
+["search", "filterPriority", "filterCategory", "filterTag", "filterIteration", "filterType", "filterAssignee"].forEach(id =>
   document.getElementById(id).addEventListener("input", () => { if (currentView === "board") renderBoard(); }));
 
 // ---- ドラッグ&ドロップ(並び替え + グループ移動) ----
