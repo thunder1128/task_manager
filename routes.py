@@ -94,26 +94,67 @@ class ApiRoutes:
         self._send_json(user_to_dict(user))
 
     def update_me(self, user):
-        """ログイン中のユーザー自身がプロフィール(ユーザー名)を更新する。"""
+        """ログイン中のユーザー自身がプロフィール(ユーザー名/パスワード)を更新する。
+
+        body 例:
+          {"username": "newname"}                                    # 名前変更
+          {"current_password": "...", "new_password": "..."}         # パスワード変更
+        パスワード変更には現在のパスワードの一致を必須とする。
+        """
         data = self._read_json()
         if data is None:
             return self._send_json({"error": "invalid json"}, 400)
-        if "username" not in data:
-            return self._send_json({"error": "更新項目がありません"}, 400)
-        username = (data.get("username") or "").strip()
-        if not username:
-            return self._send_json({"error": "ユーザー名は必須です"}, 400)
+
+        ts = now_iso()
+        changed = False
         conn = get_db()
-        try:
+
+        # ユーザー名の変更
+        if "username" in data:
+            username = (data.get("username") or "").strip()
+            if not username:
+                conn.close()
+                return self._send_json({"error": "ユーザー名は必須です"}, 400)
+            try:
+                conn.execute(
+                    "UPDATE users SET username = ?, updated_at = ? WHERE id = ?",
+                    (username, ts, user["id"]),
+                )
+            except sqlite3.IntegrityError:
+                conn.close()
+                return self._send_json({"error": "そのユーザー名は既に使われています"}, 409)
+            changed = True
+
+        # パスワードの変更(現在のパスワード確認が必須)
+        if "new_password" in data:
+            new_pw = data.get("new_password") or ""
+            cur_pw = data.get("current_password") or ""
+            row = conn.execute(
+                "SELECT password_hash FROM users WHERE id = ?", (user["id"],)
+            ).fetchone()
+            if not verify_password(cur_pw, row["password_hash"]):
+                conn.close()
+                return self._send_json({"error": "現在のパスワードが違います"}, 403)
+            if len(new_pw) < 4:
+                conn.close()
+                return self._send_json({"error": "新しいパスワードは4文字以上にしてください"}, 400)
             conn.execute(
-                "UPDATE users SET username = ?, updated_at = ? WHERE id = ?",
-                (username, now_iso(), user["id"]),
+                "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+                (hash_password(new_pw), ts, user["id"]),
             )
-            conn.commit()
-            row = conn.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
-        except sqlite3.IntegrityError:
+            # 他端末のセッションは失効させる(今使っているセッションは維持)
+            token = self._get_cookie(SESSION_COOKIE)
+            conn.execute(
+                "DELETE FROM sessions WHERE user_id = ? AND token != ?", (user["id"], token)
+            )
+            changed = True
+
+        if not changed:
             conn.close()
-            return self._send_json({"error": "そのユーザー名は既に使われています"}, 409)
+            return self._send_json({"error": "更新項目がありません"}, 400)
+
+        conn.commit()
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
         conn.close()
         self._send_json(user_to_dict(row))
 

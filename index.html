@@ -551,10 +551,35 @@
         <input type="text" id="pf-username" maxlength="80" autocomplete="off" required>
       </div>
       <div class="modal-actions">
-        <button type="button" class="btn btn-ghost" id="profileCancelBtn">キャンセル</button>
-        <button type="submit" class="btn btn-primary">保存</button>
+        <button type="submit" class="btn btn-primary">ユーザー名を保存</button>
       </div>
     </form>
+
+    <form id="passwordForm" style="border-top:1px solid var(--border); padding-top:14px; margin-top:6px;">
+      <label style="display:block; font-size:13px; font-weight:600; margin-bottom:8px; color:var(--text);">パスワード変更</label>
+      <div class="form-error" id="passwordError"></div>
+      <div class="field">
+        <label for="pf-current">現在のパスワード</label>
+        <input type="password" id="pf-current" autocomplete="current-password">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="pf-new">新しいパスワード</label>
+          <input type="password" id="pf-new" autocomplete="new-password" placeholder="4文字以上">
+        </div>
+        <div class="field">
+          <label for="pf-new2">新しいパスワード(確認)</label>
+          <input type="password" id="pf-new2" autocomplete="new-password">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="submit" class="btn btn-primary">パスワードを変更</button>
+      </div>
+    </form>
+
+    <div class="modal-actions" style="margin-top:14px;">
+      <button type="button" class="btn btn-ghost" id="profileCancelBtn">閉じる</button>
+    </div>
   </div>
 </div>
 
@@ -1547,7 +1572,12 @@ const profileOverlay = document.getElementById("profileOverlay");
 function openProfile() {
   if (!currentUser) return;
   document.getElementById("profileError").textContent = "";
+  const pwErr = document.getElementById("passwordError");
+  pwErr.textContent = ""; pwErr.style.color = "";
   document.getElementById("pf-username").value = currentUser.username;
+  document.getElementById("pf-current").value = "";
+  document.getElementById("pf-new").value = "";
+  document.getElementById("pf-new2").value = "";
   profileOverlay.classList.add("open");
   document.getElementById("pf-username").focus();
 }
@@ -1567,6 +1597,25 @@ document.getElementById("profileForm").addEventListener("submit", async e => {
     closeProfile();
     await loadProjects();  // メンバー一覧・担当者表示・オーナー名などを更新
   } catch (err) { errEl.textContent = err.message; }
+});
+document.getElementById("passwordForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const errEl = document.getElementById("passwordError");
+  errEl.textContent = "";
+  const current = document.getElementById("pf-current").value;
+  const next = document.getElementById("pf-new").value;
+  const confirm2 = document.getElementById("pf-new2").value;
+  if (!current || !next) { errEl.textContent = "現在のパスワードと新しいパスワードを入力してください"; return; }
+  if (next.length < 4) { errEl.textContent = "新しいパスワードは4文字以上にしてください"; return; }
+  if (next !== confirm2) { errEl.textContent = "新しいパスワード(確認)が一致しません"; return; }
+  try {
+    await api("/api/auth/me", "PUT", "", { current_password: current, new_password: next });
+    document.getElementById("pf-current").value = "";
+    document.getElementById("pf-new").value = "";
+    document.getElementById("pf-new2").value = "";
+    errEl.style.color = "var(--done)";
+    errEl.textContent = "パスワードを変更しました";
+  } catch (err) { errEl.style.color = "var(--p-high)"; errEl.textContent = err.message; }
 });
 
 // Escでモーダルを閉じる(追加分)
