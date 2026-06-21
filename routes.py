@@ -6,7 +6,8 @@ HTTPの低レベル処理(_send_json / _read_json / _query / _path /
 _get_cookie / serve_static)は server.Handler 側で実装される。
 
 ルート一覧:
-  認証      POST /api/auth/login, POST /api/auth/logout, GET /api/auth/me
+  認証      POST /api/auth/login, POST /api/auth/logout,
+            GET /api/auth/me, PUT /api/auth/me(自分のユーザー名変更)
   ユーザー   GET/POST /api/users, PUT/DELETE /api/users/<id>           (管理者のみ)
   プロジェクト GET/POST /api/projects, PUT/DELETE /api/projects/<id>
              GET/POST /api/projects/<id>/members,
@@ -92,6 +93,30 @@ class ApiRoutes:
             return self._send_json({"error": "unauthorized"}, 401)
         self._send_json(user_to_dict(user))
 
+    def update_me(self, user):
+        """ログイン中のユーザー自身がプロフィール(ユーザー名)を更新する。"""
+        data = self._read_json()
+        if data is None:
+            return self._send_json({"error": "invalid json"}, 400)
+        if "username" not in data:
+            return self._send_json({"error": "更新項目がありません"}, 400)
+        username = (data.get("username") or "").strip()
+        if not username:
+            return self._send_json({"error": "ユーザー名は必須です"}, 400)
+        conn = get_db()
+        try:
+            conn.execute(
+                "UPDATE users SET username = ?, updated_at = ? WHERE id = ?",
+                (username, now_iso(), user["id"]),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+        except sqlite3.IntegrityError:
+            conn.close()
+            return self._send_json({"error": "そのユーザー名は既に使われています"}, 409)
+        conn.close()
+        self._send_json(user_to_dict(row))
+
     # ---- プロジェクト権限ヘルパー ----
     @staticmethod
     def _membership(conn, project_id, user):
@@ -173,6 +198,8 @@ class ApiRoutes:
         user = self.current_user()
         if user is None:
             return self._send_json({"error": "unauthorized"}, 401)
+        if path == "/api/auth/me":
+            return self.update_me(user)
         m = re.match(r"^/api/users/(\d+)$", path)
         if m:
             return self.update_user(user, int(m.group(1)))

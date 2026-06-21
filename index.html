@@ -257,6 +257,7 @@
       <option value="1.15">文字: 大</option>
     </select>
     <span class="uname" id="userName"></span>
+    <button class="btn btn-ghost btn-sm" id="profileBtn" title="ユーザー情報">ユーザー情報</button>
     <button class="btn btn-ghost btn-sm" id="adminBtn" style="display:none;">👤 ユーザー管理</button>
     <button class="btn btn-ghost btn-sm" id="logoutBtn">ログアウト</button>
   </span>
@@ -536,6 +537,24 @@
       <button type="button" class="btn btn-danger btn-sm" id="mg-delete" style="display:none;">プロジェクトを削除</button>
       <button type="button" class="btn btn-ghost" id="manageCloseBtn">閉じる</button>
     </div>
+  </div>
+</div>
+
+<!-- ユーザー情報(プロフィール)モーダル -->
+<div class="overlay" id="profileOverlay">
+  <div class="modal">
+    <h2>ユーザー情報</h2>
+    <form id="profileForm">
+      <div class="form-error" id="profileError"></div>
+      <div class="field">
+        <label for="pf-username">ユーザー名</label>
+        <input type="text" id="pf-username" maxlength="80" autocomplete="off" required>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="profileCancelBtn">キャンセル</button>
+        <button type="submit" class="btn btn-primary">保存</button>
+      </div>
+    </form>
   </div>
 </div>
 
@@ -1523,9 +1542,36 @@ document.getElementById("addTypeForm").addEventListener("submit", async e => {
   } catch (err) { errEl.textContent = err.message; }
 });
 
+// ---- ユーザー情報(プロフィール) ----
+const profileOverlay = document.getElementById("profileOverlay");
+function openProfile() {
+  if (!currentUser) return;
+  document.getElementById("profileError").textContent = "";
+  document.getElementById("pf-username").value = currentUser.username;
+  profileOverlay.classList.add("open");
+  document.getElementById("pf-username").focus();
+}
+function closeProfile() { profileOverlay.classList.remove("open"); }
+document.getElementById("profileBtn").onclick = openProfile;
+document.getElementById("profileCancelBtn").onclick = closeProfile;
+profileOverlay.onclick = e => { if (e.target === profileOverlay) closeProfile(); };
+document.getElementById("profileForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const errEl = document.getElementById("profileError");
+  errEl.textContent = "";
+  const username = document.getElementById("pf-username").value.trim();
+  if (!username) { errEl.textContent = "ユーザー名は必須です"; return; }
+  try {
+    const updated = await api("/api/auth/me", "PUT", "", { username });
+    setCurrentUser(updated);
+    closeProfile();
+    await loadProjects();  // メンバー一覧・担当者表示・オーナー名などを更新
+  } catch (err) { errEl.textContent = err.message; }
+});
+
 // Escでモーダルを閉じる(追加分)
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") { closeProjModal(); closeManage(); closeAdmin(); closeTypeManage(); }
+  if (e.key === "Escape") { closeProjModal(); closeManage(); closeAdmin(); closeTypeManage(); closeProfile(); }
 });
 
 initFontSize();
