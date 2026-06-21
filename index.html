@@ -271,7 +271,7 @@
     <form id="loginForm">
       <div class="form-error" id="loginError"></div>
       <div class="field">
-        <label for="login-user">ユーザー名</label>
+        <label for="login-user">ユーザーID</label>
         <input type="text" id="login-user" required autocomplete="username" autofocus>
       </div>
       <div class="field">
@@ -547,11 +547,15 @@
     <form id="profileForm">
       <div class="form-error" id="profileError"></div>
       <div class="field">
-        <label for="pf-username">ユーザー名</label>
+        <label for="pf-loginid">ユーザーID(ログイン用)</label>
+        <input type="text" id="pf-loginid" maxlength="80" autocomplete="off" required>
+      </div>
+      <div class="field">
+        <label for="pf-username">ユーザー名(表示名)</label>
         <input type="text" id="pf-username" maxlength="80" autocomplete="off" required>
       </div>
       <div class="modal-actions">
-        <button type="submit" class="btn btn-primary">ユーザー名を保存</button>
+        <button type="submit" class="btn btn-primary">保存</button>
       </div>
     </form>
 
@@ -590,8 +594,12 @@
     <div id="admin-users"></div>
     <form id="createUserForm" class="inline-form">
       <div class="field">
+        <label for="au-loginid">ユーザーID</label>
+        <input type="text" id="au-loginid" autocomplete="off" placeholder="ログイン用ID">
+      </div>
+      <div class="field">
         <label for="au-username">ユーザー名</label>
-        <input type="text" id="au-username" autocomplete="off" placeholder="新規ユーザー名">
+        <input type="text" id="au-username" autocomplete="off" placeholder="表示名(省略可)">
       </div>
       <div class="field">
         <label for="au-password">初期パスワード</label>
@@ -1268,10 +1276,10 @@ document.getElementById("loginForm").addEventListener("submit", async e => {
   e.preventDefault();
   const errEl = document.getElementById("loginError");
   errEl.textContent = "";
-  const username = document.getElementById("login-user").value.trim();
+  const login_id = document.getElementById("login-user").value.trim();
   const password = document.getElementById("login-pass").value;
   try {
-    const u = await api("/api/auth/login", "POST", "", { username, password });
+    const u = await api("/api/auth/login", "POST", "", { login_id, password });
     document.getElementById("login-pass").value = "";
     hideAuthScreen();
     setCurrentUser(u);
@@ -1469,10 +1477,24 @@ async function renderUsers() {
     row.className = "list-row";
     const self = u.id === currentUser.id;
     row.innerHTML = `
-      <span class="name grow">${escapeHtml(u.username)}${self ? "(自分)" : ""}</span>
+      <span class="name grow"><code>${escapeHtml(u.login_id)}</code> / ${escapeHtml(u.username)}${self ? "(自分)" : ""}</span>
       ${u.is_admin ? '<span class="role-pill owner">管理者</span>' : ""}
+      <button class="btn btn-ghost btn-sm" data-act="id">ID変更</button>
+      <button class="btn btn-ghost btn-sm" data-act="name">名前変更</button>
       <button class="btn btn-ghost btn-sm" data-act="pw">パスワード変更</button>
       ${self ? "" : `<button class="btn btn-ghost btn-sm" data-act="del">削除</button>`}`;
+    row.querySelector('[data-act="id"]').onclick = async () => {
+      const v = prompt(`${u.username} のログイン用ユーザーID`, u.login_id);
+      if (v == null || !v.trim()) return;
+      try { await api("/api/users", "PUT", "/" + u.id, { login_id: v.trim() }); await renderUsers(); }
+      catch (err) { document.getElementById("au-error").textContent = err.message; }
+    };
+    row.querySelector('[data-act="name"]').onclick = async () => {
+      const v = prompt(`${u.username} のユーザー名(表示名)`, u.username);
+      if (v == null || !v.trim()) return;
+      try { await api("/api/users", "PUT", "/" + u.id, { username: v.trim() }); await renderUsers(); }
+      catch (err) { document.getElementById("au-error").textContent = err.message; }
+    };
     row.querySelector('[data-act="pw"]').onclick = async () => {
       const pw = prompt(`${u.username} の新しいパスワード(4文字以上)`);
       if (!pw) return;
@@ -1492,12 +1514,14 @@ document.getElementById("createUserForm").addEventListener("submit", async e => 
   e.preventDefault();
   const errEl = document.getElementById("au-error");
   errEl.textContent = "";
+  const login_id = document.getElementById("au-loginid").value.trim();
   const username = document.getElementById("au-username").value.trim();
   const password = document.getElementById("au-password").value;
   const is_admin = document.getElementById("au-admin").checked;
-  if (!username || !password) { errEl.textContent = "ユーザー名とパスワードを入力してください"; return; }
+  if (!login_id || !password) { errEl.textContent = "ユーザーIDとパスワードを入力してください"; return; }
   try {
-    await api("/api/users", "POST", "", { username, password, is_admin });
+    await api("/api/users", "POST", "", { login_id, username, password, is_admin });
+    document.getElementById("au-loginid").value = "";
     document.getElementById("au-username").value = "";
     document.getElementById("au-password").value = "";
     document.getElementById("au-admin").checked = false;
@@ -1574,6 +1598,7 @@ function openProfile() {
   document.getElementById("profileError").textContent = "";
   const pwErr = document.getElementById("passwordError");
   pwErr.textContent = ""; pwErr.style.color = "";
+  document.getElementById("pf-loginid").value = currentUser.login_id;
   document.getElementById("pf-username").value = currentUser.username;
   document.getElementById("pf-current").value = "";
   document.getElementById("pf-new").value = "";
@@ -1589,10 +1614,12 @@ document.getElementById("profileForm").addEventListener("submit", async e => {
   e.preventDefault();
   const errEl = document.getElementById("profileError");
   errEl.textContent = "";
+  const login_id = document.getElementById("pf-loginid").value.trim();
   const username = document.getElementById("pf-username").value.trim();
+  if (!login_id) { errEl.textContent = "ユーザーIDは必須です"; return; }
   if (!username) { errEl.textContent = "ユーザー名は必須です"; return; }
   try {
-    const updated = await api("/api/auth/me", "PUT", "", { username });
+    const updated = await api("/api/auth/me", "PUT", "", { login_id, username });
     setCurrentUser(updated);
     closeProfile();
     await loadProjects();  // メンバー一覧・担当者表示・オーナー名などを更新

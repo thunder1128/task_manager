@@ -80,6 +80,7 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS users (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            login_id      TEXT    NOT NULL UNIQUE,
             username      TEXT    NOT NULL UNIQUE,
             password_hash TEXT    NOT NULL,
             is_admin      INTEGER NOT NULL DEFAULT 0,
@@ -156,6 +157,16 @@ def init_db():
         """
     )
 
+    # 既存DBへのマイグレーション: users にログイン用ID(login_id)列を追加
+    # 既存ユーザーは login_id = username で初期化(従来のユーザー名でログインできる)
+    ucols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
+    if "login_id" not in ucols:
+        conn.execute("ALTER TABLE users ADD COLUMN login_id TEXT NOT NULL DEFAULT ''")
+        conn.execute("UPDATE users SET login_id = username WHERE login_id = ''")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_login_id ON users(login_id)"
+        )
+
     # 既存DBへのマイグレーション: projects に Slack Webhook URL 列を追加
     pcols = [r[1] for r in conn.execute("PRAGMA table_info(projects)").fetchall()]
     if "slack_webhook_url" not in pcols:
@@ -172,11 +183,11 @@ def init_db():
     if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
         ts = now_iso()
         conn.execute(
-            "INSERT INTO users (username, password_hash, is_admin, created_at, updated_at)"
-            " VALUES (?,?,1,?,?)",
-            (BOOTSTRAP_ADMIN_USER, hash_password(BOOTSTRAP_ADMIN_PASS), ts, ts),
+            "INSERT INTO users (login_id, username, password_hash, is_admin, created_at, updated_at)"
+            " VALUES (?,?,?,1,?,?)",
+            (BOOTSTRAP_ADMIN_USER, BOOTSTRAP_ADMIN_USER, hash_password(BOOTSTRAP_ADMIN_PASS), ts, ts),
         )
-        print(f"★ 管理者アカウントを作成しました: ユーザー名 '{BOOTSTRAP_ADMIN_USER}'")
+        print(f"★ 管理者アカウントを作成しました: ログインID '{BOOTSTRAP_ADMIN_USER}'")
         if BOOTSTRAP_ADMIN_PASS == "admin":
             print("  ⚠ 初期パスワードは 'admin' です。ログイン後すぐに変更してください")
             print("  (環境変数 ADMIN_USERNAME / ADMIN_PASSWORD で初期値を指定できます)")
@@ -258,6 +269,7 @@ def column_to_dict(row):
 def user_to_dict(row):
     return {
         "id": row["id"],
+        "login_id": row["login_id"],
         "username": row["username"],
         "is_admin": bool(row["is_admin"]),
         "created_at": row["created_at"],

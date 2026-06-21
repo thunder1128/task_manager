@@ -52,15 +52,16 @@ class ApiRoutes:
         data = self._read_json()
         if data is None:
             return self._send_json({"error": "invalid json"}, 400)
-        username = (data.get("username") or "").strip()
+        # ログインはユーザーID(login_id)で行う(旧クライアント互換で username も受ける)
+        login_id = (data.get("login_id") or data.get("username") or "").strip()
         password = data.get("password") or ""
         conn = get_db()
         try:
             row = conn.execute(
-                "SELECT * FROM users WHERE username = ?", (username,)
+                "SELECT * FROM users WHERE login_id = ?", (login_id,)
             ).fetchone()
             if row is None or not verify_password(password, row["password_hash"]):
-                return self._send_json({"error": "ユーザー名またはパスワードが違います"}, 401)
+                return self._send_json({"error": "ユーザーIDまたはパスワードが違います"}, 401)
             token = secrets.token_urlsafe(32)
             ts = now_iso()
             expires = (datetime.now(timezone.utc) + SESSION_TTL).isoformat()
@@ -109,7 +110,23 @@ class ApiRoutes:
         changed = False
         conn = get_db()
 
-        # ユーザー名の変更
+        # ログイン用ユーザーIDの変更
+        if "login_id" in data:
+            login_id = (data.get("login_id") or "").strip()
+            if not login_id:
+                conn.close()
+                return self._send_json({"error": "ユーザーIDは必須です"}, 400)
+            try:
+                conn.execute(
+                    "UPDATE users SET login_id = ?, updated_at = ? WHERE id = ?",
+                    (login_id, ts, user["id"]),
+                )
+            except sqlite3.IntegrityError:
+                conn.close()
+                return self._send_json({"error": "そのユーザーIDは既に使われています"}, 409)
+            changed = True
+
+        # ユーザー名(表示名)の変更
         if "username" in data:
             username = (data.get("username") or "").strip()
             if not username:
@@ -304,25 +321,26 @@ class ApiRoutes:
         data = self._read_json()
         if data is None:
             return self._send_json({"error": "invalid json"}, 400)
-        username = (data.get("username") or "").strip()
+        login_id = (data.get("login_id") or "").strip()
+        username = (data.get("username") or "").strip() or login_id
         password = data.get("password") or ""
-        if not username:
-            return self._send_json({"error": "ユーザー名は必須です"}, 400)
+        if not login_id:
+            return self._send_json({"error": "ユーザーIDは必須です"}, 400)
         if len(password) < 4:
             return self._send_json({"error": "パスワードは4文字以上にしてください"}, 400)
         ts = now_iso()
         conn = get_db()
         try:
             cur = conn.execute(
-                "INSERT INTO users (username, password_hash, is_admin, created_at, updated_at)"
-                " VALUES (?,?,?,?,?)",
-                (username, hash_password(password), 1 if data.get("is_admin") else 0, ts, ts),
+                "INSERT INTO users (login_id, username, password_hash, is_admin, created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?)",
+                (login_id, username, hash_password(password), 1 if data.get("is_admin") else 0, ts, ts),
             )
             conn.commit()
             row = conn.execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,)).fetchone()
         except sqlite3.IntegrityError:
             conn.close()
-            return self._send_json({"error": "そのユーザー名は既に使われています"}, 409)
+            return self._send_json({"error": "そのユーザーID/ユーザー名は既に使われています"}, 409)
         conn.close()
         self._send_json(user_to_dict(row), 201)
 
@@ -338,6 +356,18 @@ class ApiRoutes:
             conn.close()
             return self._send_json({"error": "not found"}, 404)
         fields = {}
+        if "login_id" in data:
+            login_id = (data.get("login_id") or "").strip()
+            if not login_id:
+                conn.close()
+                return self._send_json({"error": "ユーザーIDは必須です"}, 400)
+            fields["login_id"] = login_id
+        if "username" in data:
+            username = (data.get("username") or "").strip()
+            if not username:
+                conn.close()
+                return self._send_json({"error": "ユーザー名は必須です"}, 400)
+            fields["username"] = username
         if "password" in data:
             pw = data.get("password") or ""
             if len(pw) < 4:
@@ -355,7 +385,11 @@ class ApiRoutes:
             return self._send_json({"error": "更新項目がありません"}, 400)
         fields["updated_at"] = now_iso()
         sets = ", ".join(f"{k} = ?" for k in fields)
-        conn.execute(f"UPDATE users SET {sets} WHERE id = ?", list(fields.values()) + [target_id])
+        try:
+            conn.execute(f"UPDATE users SET {sets} WHERE id = ?", list(fields.values()) + [target_id])
+        except sqlite3.IntegrityError:
+            conn.close()
+            return self._send_json({"error": "そのユーザーID/ユーザー名は既に使われています"}, 409)
         # パスワード変更時は当該ユーザーのセッションを失効
         if "password_hash" in fields:
             conn.execute("DELETE FROM sessions WHERE user_id = ?", (target_id,))
