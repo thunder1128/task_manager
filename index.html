@@ -507,8 +507,8 @@
     </div>
     <form id="addMemberForm" class="inline-form" style="display:none;">
       <div class="field">
-        <label for="mg-username">ユーザー名を追加</label>
-        <input type="text" id="mg-username" autocomplete="off" placeholder="既存ユーザー名">
+        <label for="mg-userselect">ユーザーを追加</label>
+        <select id="mg-userselect"></select>
       </div>
       <div class="field" style="flex:0 0 120px;">
         <label for="mg-role">権限</label>
@@ -671,7 +671,8 @@ async function api(base, method, path = "", body) {
   return res.status === 204 ? null : res.json();
 }
 function activeProject() { return projects.find(p => p.id === activeProjectId) || null; }
-function isOwner() { const p = activeProject(); return !!(p && p.my_role === "owner"); }
+// 管理権限(オーナー または システム管理者)。サーバ側の can_manage を信頼
+function canManage() { const p = activeProject(); return !!(p && p.can_manage); }
 
 async function load() {
   if (!activeProjectId) { tasks = []; columns = []; iterations = []; taskTypes = []; members = []; render(); return; }
@@ -1364,18 +1365,32 @@ async function openManage() {
   if (!p) return;
   document.getElementById("mg-projname").textContent = p.name;
   document.getElementById("mg-error").textContent = "";
-  const owner = isOwner();
-  document.getElementById("mg-rename").style.display = owner ? "" : "none";
-  document.getElementById("addMemberForm").style.display = owner ? "flex" : "none";
-  document.getElementById("mg-delete").style.display = owner ? "" : "none";
-  // Slack設定はオーナーのみ。Webhook URLはオーナー向けレスポンスにのみ含まれる
-  document.getElementById("mg-slack-section").style.display = owner ? "" : "none";
+  const manage = canManage();  // オーナー または 管理者
+  document.getElementById("mg-rename").style.display = manage ? "" : "none";
+  document.getElementById("addMemberForm").style.display = manage ? "flex" : "none";
+  document.getElementById("mg-delete").style.display = manage ? "" : "none";
+  // Slack設定は管理権限のある人のみ。Webhook URLもその人向けレスポンスにのみ含まれる
+  document.getElementById("mg-slack-section").style.display = manage ? "" : "none";
   document.getElementById("mg-slack").value = p.slack_webhook_url || "";
   document.getElementById("mg-slack-msg").textContent =
     p.slack_configured ? "現在: 有効" : "現在: 未設定";
   document.getElementById("mg-slack-msg").style.color = "var(--muted)";
   manageOverlay.classList.add("open");
+  if (manage) await refreshAddableUsers();
   await renderMembers();
+}
+async function refreshAddableUsers() {
+  const sel = document.getElementById("mg-userselect");
+  try {
+    const users = await api(`/api/projects/${activeProjectId}/addable_users`, "GET");
+    if (users.length === 0) {
+      sel.innerHTML = `<option value="">(追加できるユーザーがいません)</option>`;
+    } else {
+      sel.innerHTML = users.map(u =>
+        `<option value="${u.id}">${escapeHtml(u.username)}（${escapeHtml(u.login_id)}）</option>`
+      ).join("");
+    }
+  } catch (e) { sel.innerHTML = `<option value="">${escapeHtml(e.message)}</option>`; }
 }
 document.getElementById("mg-slack-save").onclick = async () => {
   const p = activeProject();
@@ -1416,12 +1431,12 @@ async function renderMembers() {
   try {
     members = await api(`/api/projects/${activeProjectId}/members`, "GET");
   } catch (e) { wrap.textContent = e.message; return; }
-  const owner = isOwner();
+  const manage = canManage();
   wrap.innerHTML = "";
   members.forEach(m => {
     const row = document.createElement("div");
     row.className = "list-row";
-    const removable = owner && m.role !== "owner";
+    const removable = manage && m.role !== "owner";
     row.innerHTML = `
       <span class="name grow">${escapeHtml(m.username)}${m.user_id === currentUser.id ? "(自分)" : ""}</span>
       <span class="role-pill ${m.role}">${m.role === "owner" ? "オーナー" : "メンバー"}</span>
@@ -1439,12 +1454,12 @@ document.getElementById("addMemberForm").addEventListener("submit", async e => {
   e.preventDefault();
   const errEl = document.getElementById("mg-error");
   errEl.textContent = "";
-  const username = document.getElementById("mg-username").value.trim();
+  const user_id = document.getElementById("mg-userselect").value;
   const role = document.getElementById("mg-role").value;
-  if (!username) return;
+  if (!user_id) { errEl.textContent = "追加するユーザーを選択してください"; return; }
   try {
-    await api(`/api/projects/${activeProjectId}/members`, "POST", "", { username, role });
-    document.getElementById("mg-username").value = "";
+    await api(`/api/projects/${activeProjectId}/members`, "POST", "", { user_id: Number(user_id), role });
+    await refreshAddableUsers();
     await renderMembers();
     await loadProjectsQuiet();
   } catch (err) { errEl.textContent = err.message; }

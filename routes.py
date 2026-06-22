@@ -184,9 +184,15 @@ class ApiRoutes:
         ).fetchone()
 
     def _require_member(self, conn, project_id, user):
+        # システム管理者はすべてのプロジェクトにアクセスできる
+        if user["is_admin"]:
+            return True
         return self._membership(conn, project_id, user) is not None
 
     def _require_owner(self, conn, project_id, user):
+        # システム管理者はすべてのプロジェクトをオーナー同等に操作できる
+        if user["is_admin"]:
+            return True
         m = self._membership(conn, project_id, user)
         return m is not None and m["role"] == "owner"
 
@@ -207,6 +213,9 @@ class ApiRoutes:
         m = re.match(r"^/api/projects/(\d+)/members$", path)
         if m:
             return self.list_members(user, int(m.group(1)))
+        m = re.match(r"^/api/projects/(\d+)/addable_users$", path)
+        if m:
+            return self.addable_users(user, int(m.group(1)))
         if path == "/api/users":
             return self.list_users(user)
         if path == "/api/tasks":
@@ -432,6 +441,8 @@ class ApiRoutes:
             "SELECT COUNT(*) FROM project_members WHERE project_id = ?", (row["id"],)
         ).fetchone()[0]
         role = m["role"] if m else None
+        # 管理者はメンバーでなくてもオーナー同等に管理できる
+        can_manage = (role == "owner") or bool(user["is_admin"])
         webhook = row["slack_webhook_url"] if "slack_webhook_url" in row.keys() else ""
         result = {
             "id": row["id"],
@@ -439,25 +450,32 @@ class ApiRoutes:
             "owner_id": row["owner_id"],
             "owner_name": owner["username"] if owner else None,
             "my_role": role,
+            "can_manage": can_manage,
             "member_count": member_count,
             "slack_configured": bool(webhook),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
-        # Webhook URL は秘密情報なのでオーナーにのみ返す
-        if role == "owner":
+        # Webhook URL は秘密情報なので管理権限のある人にのみ返す
+        if can_manage:
             result["slack_webhook_url"] = webhook or ""
         return result
 
     def list_projects(self, user):
         conn = get_db()
-        rows = conn.execute(
-            """SELECT p.* FROM projects p
-               JOIN project_members pm ON pm.project_id = p.id
-               WHERE pm.user_id = ?
-               ORDER BY p.created_at ASC, p.id ASC""",
-            (user["id"],),
-        ).fetchall()
+        if user["is_admin"]:
+            # 管理者は全プロジェクトを操作できる
+            rows = conn.execute(
+                "SELECT * FROM projects ORDER BY created_at ASC, id ASC"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT p.* FROM projects p
+                   JOIN project_members pm ON pm.project_id = p.id
+                   WHERE pm.user_id = ?
+                   ORDER BY p.created_at ASC, p.id ASC""",
+                (user["id"],),
+            ).fetchall()
         result = [self._project_to_dict(conn, r, user) for r in rows]
         conn.close()
         self._send_json(result)
@@ -584,6 +602,26 @@ class ApiRoutes:
             ]
         )
 
+    def addable_users(self, user, pid):
+        """まだメンバーでない既存ユーザー一覧(プルダウン用)。オーナー/管理者のみ。"""
+        conn = get_db()
+        if conn.execute("SELECT id FROM projects WHERE id = ?", (pid,)).fetchone() is None:
+            conn.close()
+            return self._send_json({"error": "not found"}, 404)
+        if not self._require_owner(conn, pid, user):
+            conn.close()
+            return self._send_json({"error": "オーナー/管理者のみ操作できます"}, 403)
+        rows = conn.execute(
+            """SELECT id, login_id, username FROM users
+               WHERE id NOT IN (SELECT user_id FROM project_members WHERE project_id = ?)
+               ORDER BY username ASC""",
+            (pid,),
+        ).fetchall()
+        conn.close()
+        self._send_json(
+            [{"id": r["id"], "login_id": r["login_id"], "username": r["username"]} for r in rows]
+        )
+
     def add_member(self, user, pid):
         data = self._read_json()
         if data is None:
@@ -594,11 +632,21 @@ class ApiRoutes:
             return self._send_json({"error": "not found"}, 404)
         if not self._require_owner(conn, pid, user):
             conn.close()
-            return self._send_json({"error": "メンバーを追加できるのはオーナーのみです"}, 403)
-        username = (data.get("username") or "").strip()
-        target = conn.execute(
-            "SELECT * FROM users WHERE username = ?", (username,)
-        ).fetchone()
+            return self._send_json({"error": "メンバーを追加できるのはオーナー/管理者のみです"}, 403)
+        # 既存ユーザーを user_id で選択(後方互換で username/login_id も受ける)
+        target = None
+        if data.get("user_id") not in (None, ""):
+            try:
+                target = conn.execute(
+                    "SELECT * FROM users WHERE id = ?", (int(data["user_id"]),)
+                ).fetchone()
+            except (TypeError, ValueError):
+                target = None
+        else:
+            ident = (data.get("login_id") or data.get("username") or "").strip()
+            target = conn.execute(
+                "SELECT * FROM users WHERE login_id = ? OR username = ?", (ident, ident)
+            ).fetchone()
         if target is None:
             conn.close()
             return self._send_json({"error": "そのユーザーは存在しません"}, 404)
