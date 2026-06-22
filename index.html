@@ -236,6 +236,39 @@
   .list-row .name { font-weight: 600; font-size: 14px; }
   .inline-form { display: flex; gap: 8px; align-items: flex-end; margin-top: 12px; flex-wrap: wrap; }
   .inline-form .field { margin-bottom: 0; flex: 1; min-width: 140px; }
+
+  /* ---- スマホ対応(レスポンシブ) ---- */
+  @media (max-width: 640px) {
+    header { padding: 10px 14px; gap: 8px 10px; }
+    header h1 { font-size: 17px; }
+    header .stats { width: 100%; order: 9; font-size: 12px; }
+    /* spacer を改行ポイントにして、操作ボタン群を次の行へ送る */
+    header .spacer { flex-basis: 100%; height: 0; }
+    header select.proj-select { max-width: 60vw; }
+    .tabs { flex: 0 0 auto; }
+    .user-badge { flex-wrap: wrap; gap: 6px; }
+
+    .toolbar { padding: 12px 14px 0; gap: 8px; }
+    .toolbar input[type="search"] { min-width: 0; flex: 1 1 100%; }
+    .toolbar select { flex: 1 1 44%; min-width: 0; }
+    .toolbar .spacer { flex-basis: 100%; height: 0; }
+
+    /* かんばんは横スクロール維持。1列をほぼ全幅にして隣をちら見せ */
+    .board { padding: 12px 14px 32px; gap: 12px; scroll-snap-type: x mandatory; }
+    .column { width: 86vw; flex: 0 0 86vw; max-width: 340px; scroll-snap-align: start; }
+    .add-column { flex: 0 0 86vw; max-width: 340px; }
+    .backlog-wrap { padding: 12px 14px 32px; }
+
+    /* モーダルはほぼ全画面・ペアフィールドは縦積み */
+    .overlay { padding: 16px 10px; }
+    .modal { padding: 18px 16px; max-width: 100%; }
+    .field-row { flex-direction: column; gap: 0; }
+    .inline-form { flex-direction: column; align-items: stretch; gap: 10px; }
+    .inline-form .field { min-width: 0; }
+    .inline-form button { width: 100%; }
+
+    .auth-card { padding: 24px 20px; }
+  }
 </style>
 </head>
 <body>
